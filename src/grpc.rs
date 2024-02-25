@@ -1,30 +1,28 @@
 use tonic::{Request, Response, Status};
 
-use main_grpc::greeter_server::Greeter;
+use main_grpc::heartbeat_server::Heartbeat;
 
-use main_grpc::{HelloReply, HelloRequest};
+use main_grpc::{HeartbeatReply, HeartbeatRequest};
 pub mod main_grpc {
     tonic::include_proto!("main");
 }
 
 use tonic;
 
-use log::{info, warn};
+use log::info;
 
 #[derive(Debug, Default)]
-pub struct MyGreeter {}
+pub struct Heartbeater {}
 
 #[tonic::async_trait]
-impl Greeter for MyGreeter {
-    async fn say_hello(
+impl Heartbeat for Heartbeater {
+    async fn heartbeat(
         &self,
-        request: Request<HelloRequest>,
-    ) -> Result<Response<HelloReply>, Status> {
+        request: Request<HeartbeatRequest>,
+    ) -> Result<Response<HeartbeatReply>, Status> {
         info!("Got a request: {:?}", request);
 
-        let reply = main_grpc::HelloReply {
-            message: format!("Hello {}!", request.into_inner().name),
-        };
+        let reply = main_grpc::HeartbeatReply {};
 
         Ok(Response::new(reply))
     }
