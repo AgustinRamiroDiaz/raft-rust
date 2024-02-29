@@ -1,7 +1,7 @@
 mod arguments;
 mod grpc;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use clap::Parser;
 use grpc::{
@@ -11,54 +11,109 @@ use grpc::{
     Heartbeater,
 };
 use log::{info, warn};
+use tokio::sync::Mutex;
 use tonic::transport::Server;
 
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone)]
+enum NodeType {
+    Follower,
+    Candidate,
+    Leader,
+}
+
+#[derive(Debug, Clone)]
 struct Node {
     address: SocketAddr,
     peers: Arc<Vec<String>>,
+    called: u64,
+    node_type: NodeType,
+    last_heartbeat: DateTime<Utc>,
 }
+// TODO: the node should be an Arc<Mutex<Node>> so that it can be shared between the client and server threads
+// the node will behave like a database, and the client and server threads will be the clients connecting to the database
 
-impl Node {
-    async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let peers = self.peers.clone();
+async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
+    let peers = node.peers.clone();
 
-        let client_thread = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                for peer in &*peers {
-                    let mut client = match HeartbeatClient::connect(peer.clone()).await {
-                        Ok(client) => client,
-                        Err(e) => {
-                            warn!("Failed to connect to {}: {:?}", &peer, e);
-                            continue;
-                        }
-                    };
+    let node = Arc::new(Mutex::new(node));
 
-                    let request = tonic::Request::new(HeartbeatRequest {});
+    let _node = node.clone();
+    let client_thread = tokio::spawn(async move {
+        loop {
+            let node_type;
+            {
+                node_type = node.lock().await.node_type.clone();
+            }
 
-                    match client.heartbeat(request).await {
-                        Ok(response) => {
-                            info!("RESPONSE={:?}", response);
-                        }
-                        Err(e) => {
-                            warn!("Failed to send request: {:?}", e);
-                        }
+            match node_type {
+                NodeType::Follower => {
+                    info!("I'm a follower");
+
+                    let last_heartbeat = node.lock().await.last_heartbeat;
+
+                    let deadline = last_heartbeat + chrono::Duration::seconds(1);
+
+                    info!("Deadline: {:?}", deadline);
+
+                    while Utc::now() < deadline
+                        && last_heartbeat == node.lock().await.last_heartbeat
+                    {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        info!("Waiting for a heartbeat")
+                    }
+
+                    info!("Last heartbeat: {:?}", last_heartbeat);
+                    if last_heartbeat == node.lock().await.last_heartbeat {
+                        info!("Didn't receive a heartbeat in 2 seconds");
+                        info!("I'm a candidate now");
+                        node.lock().await.node_type = NodeType::Candidate;
+                    }
+                }
+                NodeType::Candidate => {
+                    info!("I'm a candidate");
+                }
+                NodeType::Leader => {
+                    info!("I'm a leader");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    for peer in &*peers {
+                        let mut client = match HeartbeatClient::connect(peer.clone()).await {
+                            Ok(client) => client,
+                            Err(e) => {
+                                warn!("Failed to connect to {}: {:?}", &peer, e);
+                                continue;
+                            }
+                        };
+
+                        let request = tonic::Request::new(HeartbeatRequest {});
+
+                        match client.heartbeat(request).await {
+                            Ok(response) => {
+                                info!("RESPONSE={:?}", response);
+                            }
+                            Err(e) => {
+                                warn!("Failed to send request: {:?}", e);
+                            }
+                        };
                     }
                 }
             }
-        });
+        }
+    });
 
-        let server_thread = Server::builder()
-            .add_service(HeartbeatServer::new(Heartbeater::default()))
-            .serve(self.address);
+    let node = _node;
 
-        let (client_status, server_status) = tokio::join!(client_thread, server_thread);
+    let server_thread = Server::builder()
+        .add_service(HeartbeatServer::new(Heartbeater { node: node.clone() }))
+        .serve(node.lock().await.address);
 
-        client_status.unwrap();
-        server_status.unwrap();
+    let (client_status, server_status) = tokio::join!(client_thread, server_thread);
 
-        Ok(())
-    }
+    client_status.unwrap();
+    server_status.unwrap();
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -71,11 +126,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let peers = Arc::new(args.peers);
 
-    Node {
+    run(Node {
         address: addr,
         peers,
-    }
-    .run()
+        called: 0,
+        node_type: NodeType::Follower,
+        last_heartbeat: Utc::now(),
+    })
     .await?;
 
     Ok(())

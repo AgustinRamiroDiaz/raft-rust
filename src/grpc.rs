@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
 use main_grpc::heartbeat_server::Heartbeat;
@@ -11,8 +14,12 @@ use tonic;
 
 use log::info;
 
-#[derive(Debug, Default)]
-pub struct Heartbeater {}
+use crate::Node;
+
+#[derive(Debug)]
+pub struct Heartbeater {
+    pub node: Arc<Mutex<Node>>,
+}
 
 #[tonic::async_trait]
 impl Heartbeat for Heartbeater {
@@ -21,6 +28,12 @@ impl Heartbeat for Heartbeater {
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatReply>, Status> {
         info!("Got a request: {:?}", request);
+
+        self.node.lock().await.called += 1;
+
+        info!("Called: {}", self.node.lock().await.called);
+
+        self.node.lock().await.last_heartbeat = chrono::Utc::now();
 
         let reply = main_grpc::HeartbeatReply {};
 
