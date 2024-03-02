@@ -11,12 +11,17 @@ use grpc::{
     Heartbeater,
 };
 use log::{info, warn};
-use tokio::sync::Mutex;
+use tokio::{
+    select,
+    sync::{oneshot, Mutex},
+};
 use tonic::transport::Server;
 
 use chrono::{DateTime, Utc};
 
-#[derive(Debug, Clone)]
+use crate::grpc::main_grpc::RequestVoteRequest;
+
+#[derive(Debug, Clone, PartialEq)]
 enum NodeType {
     Follower,
     Candidate,
@@ -27,12 +32,15 @@ enum NodeType {
 struct Node {
     address: SocketAddr,
     peers: Arc<Vec<String>>,
-    called: u64,
     node_type: NodeType,
     last_heartbeat: DateTime<Utc>,
+    term: u64,
+    last_voted_for_term: Option<u64>,
 }
 // TODO: the node should be an Arc<Mutex<Node>> so that it can be shared between the client and server threads
 // the node will behave like a database, and the client and server threads will be the clients connecting to the database
+
+// With go's mindset I want to: spawn a thread depending on node type, and be able to cancel that thread when a node type changes
 
 async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
     let peers = node.peers.clone();
@@ -46,6 +54,19 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
             {
                 node_type = node.lock().await.node_type.clone();
             }
+            let _node = node.clone();
+            let (tx, rx) = oneshot::channel::<()>(); // Node type change signal
+            tokio::spawn(async move {
+                let node = _node;
+                let last_node_type = node.lock().await.node_type.clone();
+                loop {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    if last_node_type != node.lock().await.node_type {
+                        tx.send(()).unwrap_or_default();
+                        break;
+                    }
+                }
+            });
 
             match node_type {
                 NodeType::Follower => {
@@ -73,6 +94,49 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 NodeType::Candidate => {
                     info!("I'm a candidate");
+                    node.lock().await.term += 1;
+
+                    let mut total_votes = 1; // I vote for myself
+                    for peer in &*peers {
+                        let mut client = match HeartbeatClient::connect(peer.clone()).await {
+                            Ok(client) => client,
+                            Err(e) => {
+                                warn!("Failed to connect to {}: {:?}", &peer, e);
+                                continue;
+                            }
+                        };
+
+                        let request = tonic::Request::new(RequestVoteRequest {
+                            term: node.lock().await.term,
+                        });
+
+                        match client.request_vote(request).await {
+                            Ok(response) => {
+                                info!("RESPONSE={:?}", response);
+                                if response.get_ref().vote_granted {
+                                    info!("Vote granted");
+                                    total_votes += 1;
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to send request: {:?}", e);
+                            }
+                        };
+                    }
+
+                    if total_votes > (peers.len() + 1) / 2 {
+                        info!("I'm a leader now");
+                        node.lock().await.node_type = NodeType::Leader;
+                    } else {
+                        info!("Waiting to request votes again");
+                        select! {
+                            _ = rx => {
+                                info!("Node type changed");
+                            }
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                            }
+                        }
+                    }
                 }
                 NodeType::Leader => {
                     info!("I'm a leader");
@@ -86,7 +150,9 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                             }
                         };
 
-                        let request = tonic::Request::new(HeartbeatRequest {});
+                        let request = tonic::Request::new(HeartbeatRequest {
+                            term: node.lock().await.term,
+                        });
 
                         match client.heartbeat(request).await {
                             Ok(response) => {
@@ -129,9 +195,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     run(Node {
         address: addr,
         peers,
-        called: 0,
         node_type: NodeType::Follower,
         last_heartbeat: Utc::now(),
+        term: 0,
+        last_voted_for_term: None,
     })
     .await?;
 

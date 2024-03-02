@@ -3,8 +3,20 @@ package main;
 
 service Heartbeat {
     rpc Heartbeat (HeartbeatRequest) returns (HeartbeatReply);
+    rpc RequestVote (RequestVoteRequest) returns (RequestVoteReply);
 }
 
-message HeartbeatRequest {}
+message HeartbeatRequest {
+    uint64 term = 1;
+}
 
 message HeartbeatReply {}
+
+message RequestVoteRequest {
+    uint64 term = 1;
+}
+
+message RequestVoteReply {
+    uint64 term = 1;
+    bool voteGranted = 2;
+}
