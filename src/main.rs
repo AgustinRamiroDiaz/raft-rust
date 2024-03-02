@@ -31,12 +31,26 @@ enum NodeType {
 #[derive(Debug, Clone)]
 struct Node {
     address: SocketAddr,
-    peers: Arc<Vec<String>>,
+    peers: Vec<String>,
     node_type: NodeType,
     last_heartbeat: DateTime<Utc>,
     term: u64,
     last_voted_for_term: Option<u64>,
 }
+
+impl Node {
+    fn new(address: SocketAddr, peers: Vec<String>) -> Self {
+        Self {
+            address,
+            peers,
+            node_type: NodeType::Follower,
+            last_heartbeat: Utc::now(),
+            term: 0,
+            last_voted_for_term: None,
+        }
+    }
+}
+
 // TODO: the node should be an Arc<Mutex<Node>> so that it can be shared between the client and server threads
 // the node will behave like a database, and the client and server threads will be the clients connecting to the database
 
@@ -97,7 +111,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                     node.lock().await.term += 1;
 
                     let mut total_votes = 1; // I vote for myself
-                    for peer in &*peers {
+                    for peer in &peers {
                         let mut client = match HeartbeatClient::connect(peer.clone()).await {
                             Ok(client) => client,
                             Err(e) => {
@@ -190,17 +204,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = args.address.parse()?;
 
-    let peers = Arc::new(args.peers);
+    let peers = args.peers;
 
-    run(Node {
-        address: addr,
-        peers,
-        node_type: NodeType::Follower,
-        last_heartbeat: Utc::now(),
-        term: 0,
-        last_voted_for_term: None,
-    })
-    .await?;
+    run(Node::new(addr, peers)).await?;
 
     Ok(())
 }
