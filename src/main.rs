@@ -13,7 +13,7 @@ use grpc::{
 use log::{info, warn};
 use tokio::{
     select,
-    sync::{oneshot, Mutex},
+    sync::{mpsc, oneshot, Mutex},
 };
 use tonic::transport::Server;
 
@@ -28,7 +28,7 @@ enum NodeType {
     Leader,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Node {
     address: SocketAddr,
     peers: Vec<String>,
@@ -36,10 +36,14 @@ struct Node {
     last_heartbeat: DateTime<Utc>,
     term: u64,
     last_voted_for_term: Option<u64>,
+    // heart_beat_event_sender: mpsc::Sender<()>,
+    // heart_beat_event_receiver: mpsc::Receiver<()>,
 }
 
 impl Node {
     fn new(address: SocketAddr, peers: Vec<String>) -> Self {
+        // let (heart_beat_event_sender, heart_beat_event_receiver) = mpsc::channel(32);
+
         Self {
             address,
             peers,
@@ -47,6 +51,8 @@ impl Node {
             last_heartbeat: Utc::now(),
             term: 0,
             last_voted_for_term: None,
+            // heart_beat_event_sender,
+            // heart_beat_event_receiver,
         }
     }
 }
@@ -154,7 +160,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 NodeType::Leader => {
                     info!("I'm a leader");
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    info!("Sending heartbeats");
                     for peer in &*peers {
                         let mut client = match HeartbeatClient::connect(peer.clone()).await {
                             Ok(client) => client,
@@ -176,6 +182,15 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                                 warn!("Failed to send request: {:?}", e);
                             }
                         };
+                    }
+
+                    info!("Waiting to send heartbeats again");
+                    select! {
+                        _ = rx => {
+                            info!("Node type changed");
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        }
                     }
                 }
             }
