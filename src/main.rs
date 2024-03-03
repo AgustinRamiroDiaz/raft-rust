@@ -58,11 +58,6 @@ impl Node {
     }
 }
 
-// TODO: the node should be an Arc<Mutex<Node>> so that it can be shared between the client and server threads
-// the node will behave like a database, and the client and server threads will be the clients connecting to the database
-
-// With go's mindset I want to: spawn a thread depending on node type, and be able to cancel that thread when a node type changes
-
 async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
     let peers = node.peers.clone();
 
