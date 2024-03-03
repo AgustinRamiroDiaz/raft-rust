@@ -10,7 +10,7 @@ use grpc::{
     },
     Heartbeater,
 };
-use log::{info, warn};
+use log::{debug, info, warn};
 use tokio::{
     select,
     sync::{oneshot, watch, Mutex},
@@ -66,10 +66,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
     let _node = node.clone();
     let client_thread = tokio::spawn(async move {
         loop {
-            let node_type;
-            {
-                node_type = node.lock().await.node_type.clone();
-            }
+            let node_type = node.lock().await.node_type.clone();
             let _node = node.clone();
             let (tx, rx) = oneshot::channel::<()>(); // Node type change signal
             tokio::spawn(async move {
@@ -128,7 +125,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
 
                         match client.request_vote(request).await {
                             Ok(response) => {
-                                info!("RESPONSE={:?}", response);
+                                debug!("RESPONSE={:?}", response);
                                 if response.get_ref().vote_granted {
                                     info!("I got a vote!");
                                     total_votes += 1;
@@ -172,7 +169,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
 
                         match client.heartbeat(request).await {
                             Ok(response) => {
-                                info!("RESPONSE={:?}", response);
+                                debug!("RESPONSE={:?}", response);
                             }
                             Err(e) => {
                                 warn!("Failed to send request: {:?}", e);
