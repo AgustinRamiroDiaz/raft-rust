@@ -13,11 +13,10 @@ use grpc::{
 use log::{info, warn};
 use tokio::{
     select,
-    sync::{mpsc, oneshot, Mutex},
+    sync::{oneshot, watch, Mutex},
+    time::{self, Instant},
 };
 use tonic::transport::Server;
-
-use chrono::{DateTime, Utc};
 
 use crate::grpc::main_grpc::RequestVoteRequest;
 
@@ -28,31 +27,33 @@ enum NodeType {
     Leader,
 }
 
+type HeartBeatEvent = u64;
+
 #[derive(Debug)]
 struct Node {
     address: SocketAddr,
     peers: Vec<String>,
     node_type: NodeType,
-    last_heartbeat: DateTime<Utc>,
+    last_heartbeat: Instant, // TODO: maybe we can remove this field an rely only in the channels
     term: u64,
     last_voted_for_term: Option<u64>,
-    // heart_beat_event_sender: mpsc::Sender<()>,
-    // heart_beat_event_receiver: mpsc::Receiver<()>,
+    heart_beat_event_sender: watch::Sender<HeartBeatEvent>,
+    heart_beat_event_receiver: watch::Receiver<HeartBeatEvent>,
 }
 
 impl Node {
     fn new(address: SocketAddr, peers: Vec<String>) -> Self {
-        // let (heart_beat_event_sender, heart_beat_event_receiver) = mpsc::channel(32);
+        let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
 
         Self {
             address,
             peers,
             node_type: NodeType::Follower,
-            last_heartbeat: Utc::now(),
+            last_heartbeat: Instant::now(),
             term: 0,
             last_voted_for_term: None,
-            // heart_beat_event_sender,
-            // heart_beat_event_receiver,
+            heart_beat_event_sender,
+            heart_beat_event_receiver,
         }
     }
 }
@@ -92,29 +93,39 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                 NodeType::Follower => {
                     info!("I'm a follower");
 
-                    let last_heartbeat = node.lock().await.last_heartbeat;
+                    info!("Waiting for heartbeats");
 
-                    let deadline = last_heartbeat + chrono::Duration::seconds(1);
-
-                    info!("Deadline: {:?}", deadline);
-
-                    while Utc::now() < deadline
-                        && last_heartbeat == node.lock().await.last_heartbeat
+                    let mut receiver;
                     {
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        info!("Waiting for a heartbeat")
+                        receiver = node.lock().await.heart_beat_event_receiver.clone();
                     }
 
-                    info!("Last heartbeat: {:?}", last_heartbeat);
-                    if last_heartbeat == node.lock().await.last_heartbeat {
-                        info!("Didn't receive a heartbeat in 2 seconds");
-                        info!("I'm a candidate now");
-                        node.lock().await.node_type = NodeType::Candidate;
+                    info!(
+                        "Last heartbeat seen {}! ",
+                        *node
+                            .lock()
+                            .await
+                            .heart_beat_event_receiver
+                            .borrow_and_update()
+                    );
+                    select! {
+                        _ = time::sleep(Duration::from_secs(2)) => {
+                            warn!("Didn't receive a heartbeat in 2 seconds");
+                            node.lock().await.node_type = NodeType::Candidate;
+                        }
+                        _ = receiver.changed() => {
+                            info!("Heartbeat event received");
+                        }
                     }
                 }
                 NodeType::Candidate => {
                     info!("I'm a candidate");
-                    node.lock().await.term += 1;
+
+                    {
+                        let mut node = node.lock().await;
+                        node.term += 1;
+                        node.last_voted_for_term = Some(node.term);
+                    }
 
                     let mut total_votes = 1; // I vote for myself
                     for peer in &peers {
@@ -134,7 +145,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                             Ok(response) => {
                                 info!("RESPONSE={:?}", response);
                                 if response.get_ref().vote_granted {
-                                    info!("Vote granted");
+                                    info!("I got a vote!");
                                     total_votes += 1;
                                 }
                             }
@@ -161,7 +172,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                 NodeType::Leader => {
                     info!("I'm a leader");
                     info!("Sending heartbeats");
-                    for peer in &*peers {
+                    for peer in &peers {
                         let mut client = match HeartbeatClient::connect(peer.clone()).await {
                             Ok(client) => client,
                             Err(e) => {
@@ -189,7 +200,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                         _ = rx => {
                             info!("Node type changed");
                         }
-                        _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        _ = tokio::time::sleep(Duration::from_millis(500)) => {
                         }
                     }
                 }

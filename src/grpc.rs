@@ -12,7 +12,7 @@ pub mod main_grpc {
 
 use tonic;
 
-use log::info;
+use log::debug;
 
 use crate::Node;
 
@@ -27,7 +27,7 @@ impl Heartbeat for Heartbeater {
         &self,
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatReply>, Status> {
-        info!("Got a request: {:?}", request);
+        debug!("Got a request: {:?}", request);
 
         let mut node = self.node.lock().await;
 
@@ -36,7 +36,11 @@ impl Heartbeat for Heartbeater {
             node.node_type = crate::NodeType::Follower;
         }
 
-        node.last_heartbeat = chrono::Utc::now();
+        if request.get_ref().term >= node.term {
+            node.heart_beat_event_sender.send_modify(|x| *x = *x + 1);
+        }
+
+        node.last_heartbeat = tokio::time::Instant::now();
 
         let reply = main_grpc::HeartbeatReply {};
 
@@ -47,7 +51,7 @@ impl Heartbeat for Heartbeater {
         &self,
         request: tonic::Request<RequestVoteRequest>,
     ) -> std::result::Result<tonic::Response<RequestVoteReply>, tonic::Status> {
-        info!("Got a request: {:?}", request);
+        debug!("Got a request: {:?}", request);
 
         let mut node = self.node.lock().await;
 
