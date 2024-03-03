@@ -95,19 +95,9 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
 
                     info!("Waiting for heartbeats");
 
-                    let mut receiver;
-                    {
-                        receiver = node.lock().await.heart_beat_event_receiver.clone();
-                    }
+                    let mut receiver = node.lock().await.heart_beat_event_receiver.clone();
 
-                    info!(
-                        "Last heartbeat seen {}! ",
-                        *node
-                            .lock()
-                            .await
-                            .heart_beat_event_receiver
-                            .borrow_and_update()
-                    );
+                    info!("Last heartbeat seen {}! ", *receiver.borrow_and_update());
                     select! {
                         _ = time::sleep(Duration::from_secs(2)) => {
                             warn!("Didn't receive a heartbeat in 2 seconds");
