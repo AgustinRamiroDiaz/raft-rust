@@ -1,5 +1,7 @@
 # Rust implementation of Raft consensus algorithm
 
+For studying purpose
+
 [Raft algorithm](https://raft.github.io/raft.pdf)
 
 ## Usage
@@ -11,3 +13,11 @@ RUST_LOG=info cargo run -- -p http://[::1]:50050 -a [::1]:50051
 RUST_LOG=info car
 go run -- -p http://[::1]:50051 -a [::1]:50050
 ```
+
+# Current state
+- [x] Leader election 
+
+# Future ideas
+
+- [ ] Run in Kubernetes
+- [ ] Implement key value store 
