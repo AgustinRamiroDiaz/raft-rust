@@ -11,6 +11,7 @@ use grpc::{
     Heartbeater,
 };
 use log::{debug, info, warn};
+use rand::{thread_rng, Rng};
 use tokio::{
     select,
     sync::{oneshot, watch, Mutex},
@@ -146,7 +147,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
                             _ = rx => {
                                 info!("Node type changed");
                             }
-                            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                            _ = tokio::time::sleep(Duration::from_millis( thread_rng().gen_range(90..110))) => {
                             }
                         }
                     }

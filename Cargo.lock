@@ -857,6 +857,7 @@ dependencies = [
  "env_logger",
  "log",
  "prost",
+ "rand",
  "tokio",
  "tonic",
  "tonic-build",
