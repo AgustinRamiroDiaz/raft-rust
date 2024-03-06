@@ -42,6 +42,36 @@ struct Node {
     heart_beat_event_receiver: watch::Receiver<HeartBeatEvent>,
 }
 
+#[cfg(test)]
+mod tests {
+    use tokio::spawn;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn becomes_candidate_when_no_heartbeats() -> Result<(), Box<dyn std::error::Error>> {
+        let socket = "[::1]:50000".parse()?;
+        let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
+
+        let node = Node {
+            address: socket,
+            peers: vec![],
+            term: 0,
+            last_heartbeat: Instant::now(),
+            node_type: NodeType::Follower,
+            last_voted_for_term: None,
+            heart_beat_event_sender,
+            heart_beat_event_receiver,
+        };
+
+        spawn(run(node));
+
+        todo!("Test not implemented");
+
+        Ok(())
+    }
+}
+
 impl Node {
     fn new(address: SocketAddr, peers: Vec<String>) -> Self {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
@@ -59,7 +89,7 @@ impl Node {
     }
 }
 
-async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(node: Node) -> anyhow::Result<()> {
     let peers = node.peers.clone();
 
     let node = Arc::new(Mutex::new(node));
@@ -206,7 +236,7 @@ async fn run(node: Node) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let args = arguments::Args::parse();
