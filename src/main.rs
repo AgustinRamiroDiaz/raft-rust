@@ -28,19 +28,6 @@ enum NodeType {
     Leader,
 }
 
-pub trait Sleeper: Send + 'static {
-    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send;
-}
-
-#[derive(Clone)]
-struct TokioSleeper {}
-
-impl Sleeper for TokioSleeper {
-    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
-        tokio::time::sleep(duration)
-    }
-}
-
 type HeartBeatEvent = u64;
 
 #[derive(Debug)]
@@ -68,23 +55,6 @@ mod tests {
     use tokio::spawn;
 
     use super::*;
-
-    #[derive(Clone)]
-    struct MockSleeper<F>
-    where
-        F: Fn(Duration) -> Duration,
-    {
-        modify_duration: F,
-    }
-
-    impl<F> Sleeper for MockSleeper<F>
-    where
-        F: Fn(Duration) -> Duration + Send + 'static,
-    {
-        fn sleep(&self, duration: Duration) -> impl std::future::Future<Output = ()> + Send {
-            tokio::time::sleep((self.modify_duration)(duration))
-        }
-    }
 
     #[tokio::test]
     async fn becomes_candidate_when_no_heartbeats() -> anyhow::Result<()> {
