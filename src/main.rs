@@ -44,9 +44,10 @@ impl Sleeper for TokioSleeper {
 type HeartBeatEvent = u64;
 
 #[derive(Debug)]
-struct Node<S>
+struct Node<S, SO>
 where
-    S: Sleeper,
+    SO: Future<Output = ()>,
+    S: Fn(Duration) -> SO + Send + 'static,
 {
     address: SocketAddr,
     peers: Vec<String>,
@@ -88,21 +89,9 @@ mod tests {
     #[tokio::test]
     async fn becomes_candidate_when_no_heartbeats() -> anyhow::Result<()> {
         let socket = "[::1]:50000".parse()?;
-        let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
 
-        let node = Node {
-            address: socket,
-            peers: vec![],
-            term: 0,
-            last_heartbeat: Instant::now(),
-            node_type: NodeType::Follower,
-            last_voted_for_term: None,
-            heart_beat_event_sender,
-            heart_beat_event_receiver,
-            sleeper: MockSleeper {
-                modify_duration: |x| 0 * x,
-            },
-        };
+        let sleeper: fn(_) -> _ = |_| async move { () };
+        let node = Node::new(socket, vec![], sleeper);
 
         let node = Arc::new(Mutex::new(node));
 
@@ -120,8 +109,12 @@ mod tests {
     }
 }
 
-impl Node<TokioSleeper> {
-    fn new(address: SocketAddr, peers: Vec<String>) -> Self {
+impl<S, SO> Node<S, SO>
+where
+    SO: Future<Output = ()>,
+    S: Fn(Duration) -> SO + Send + 'static,
+{
+    fn new(address: SocketAddr, peers: Vec<String>, sleep: S) -> Self {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
 
         Self {
@@ -133,14 +126,15 @@ impl Node<TokioSleeper> {
             last_voted_for_term: None,
             heart_beat_event_sender,
             heart_beat_event_receiver,
-            sleeper: TokioSleeper {},
+            sleeper: sleep,
         }
     }
 }
 
-impl<S> Node<S>
+impl<S, SO> Node<S, SO>
 where
-    S: Sleeper + Clone,
+    SO: Future<Output = ()> + Send + 'static,
+    S: Fn(Duration) -> SO + Send + Clone,
 {
     async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
@@ -176,7 +170,7 @@ where
                         let sleeper = node.lock().await.sleeper.clone();
                         info!("Last heartbeat seen {}! ", *receiver.borrow_and_update());
                         select! {
-                            _ = sleeper.sleep(Duration::from_secs(2)) => {
+                            _ = sleeper(Duration::from_secs(2)) => {
                                 warn!("Didn't receive a heartbeat in 2 seconds");
                                 node.lock().await.node_type = NodeType::Candidate;
                             }
@@ -300,7 +294,9 @@ async fn main() -> anyhow::Result<()> {
 
     let peers = args.peers;
 
-    Node::run(Arc::new(Mutex::new(Node::new(addr, peers)))).await?;
+    let node = Node::new(addr, peers, |d| sleep(d));
+
+    Node::run(Arc::new(Mutex::new(node))).await?;
 
     Ok(())
 }

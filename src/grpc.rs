@@ -16,20 +16,22 @@ use tonic;
 
 use log::debug;
 
-use crate::{Node, Sleeper};
+use crate::Node;
 
 #[derive(Debug)]
-pub struct Heartbeater<S>
+pub struct Heartbeater<S, SO>
 where
-    S: Sleeper,
+    SO: Future<Output = ()>,
+    S: Fn(Duration) -> SO + Send + 'static,
 {
-    pub node: Arc<Mutex<Node<S>>>,
+    pub node: Arc<Mutex<Node<S, SO>>>,
 }
 
 #[tonic::async_trait]
-impl<S> Heartbeat for Heartbeater<S>
+impl<S, SO> Heartbeat for Heartbeater<S, SO>
 where
-    S: Sleeper,
+    SO: Future<Output = ()> + 'static,
+    S: Fn(Duration) -> SO + Send + 'static,
 {
     async fn heartbeat(
         &self,
