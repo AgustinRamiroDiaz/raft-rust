@@ -1,17 +1,17 @@
 mod arguments;
-mod grpc;
+mod server;
 
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use clap::Parser;
-use grpc::{
+use log::{debug, info, warn};
+use rand::{thread_rng, Rng};
+use server::{
     main_grpc::{
         heartbeat_client::HeartbeatClient, heartbeat_server::HeartbeatServer, HeartbeatRequest,
     },
     Heartbeater,
 };
-use log::{debug, info, warn};
-use rand::{thread_rng, Rng};
 use tokio::{
     select,
     sync::{oneshot, watch, Mutex},
@@ -19,7 +19,7 @@ use tokio::{
 };
 use tonic::transport::Server;
 
-use crate::grpc::main_grpc::RequestVoteRequest;
+use crate::server::main_grpc::RequestVoteRequest;
 
 #[derive(Debug, Clone, PartialEq)]
 enum NodeType {
