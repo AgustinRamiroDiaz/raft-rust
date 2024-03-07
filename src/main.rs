@@ -1,7 +1,7 @@
 mod arguments;
 mod grpc;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use clap::Parser;
 use grpc::{
@@ -29,13 +29,14 @@ enum NodeType {
 }
 
 pub trait Sleeper: Send + 'static {
-    fn sleep(&self, duration: Duration) -> impl std::future::Future<Output = ()> + Send;
+    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send;
 }
 
+#[derive(Clone)]
 struct TokioSleeper {}
 
 impl Sleeper for TokioSleeper {
-    fn sleep(&self, duration: Duration) -> impl std::future::Future<Output = ()> + Send {
+    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
         tokio::time::sleep(duration)
     }
 }
@@ -55,7 +56,7 @@ where
     last_voted_for_term: Option<u64>,
     heart_beat_event_sender: watch::Sender<HeartBeatEvent>,
     heart_beat_event_receiver: watch::Receiver<HeartBeatEvent>,
-    sleep: S,
+    sleeper: S,
 }
 
 #[cfg(test)]
@@ -67,6 +68,7 @@ mod tests {
 
     use super::*;
 
+    #[derive(Clone)]
     struct MockSleeper<F>
     where
         F: Fn(Duration) -> Duration,
@@ -97,17 +99,18 @@ mod tests {
             last_voted_for_term: None,
             heart_beat_event_sender,
             heart_beat_event_receiver,
-            sleep: MockSleeper {
+            sleeper: MockSleeper {
                 modify_duration: |x| 0 * x,
             },
-        };
-        let sleeper = MockSleeper {
-            modify_duration: |x| 0 * x,
         };
 
         let node = Arc::new(Mutex::new(node));
 
-        spawn(Node::run(node.clone(), sleeper));
+        spawn(Node::run(node.clone()));
+        spawn(async {
+            sleep(Duration::from_millis(300)).await;
+            panic!("Test is taking too long, probably a deadlock")
+        });
 
         sleep(Duration::from_millis(100)).await;
 
@@ -130,16 +133,16 @@ impl Node<TokioSleeper> {
             last_voted_for_term: None,
             heart_beat_event_sender,
             heart_beat_event_receiver,
-            sleep: TokioSleeper {},
+            sleeper: TokioSleeper {},
         }
     }
 }
 
 impl<S> Node<S>
 where
-    S: Sleeper,
+    S: Sleeper + Clone,
 {
-    async fn run(node: Arc<Mutex<Self>>, sleeper: impl Sleeper) -> anyhow::Result<()> {
+    async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
 
         let _node = node.clone();
@@ -166,8 +169,11 @@ where
 
                         info!("Waiting for heartbeats");
 
+                        // TODO: review
+                        // We are cloning them in order to release the lock, since having references doesn't drop the guard
+                        // There might be an alternative: using multiple Arc<Mutex>> for each field, since they all have different purposes and aren't strictly bundled
                         let mut receiver = node.lock().await.heart_beat_event_receiver.clone();
-
+                        let sleeper = node.lock().await.sleeper.clone();
                         info!("Last heartbeat seen {}! ", *receiver.borrow_and_update());
                         select! {
                             _ = sleeper.sleep(Duration::from_secs(2)) => {
@@ -294,11 +300,7 @@ async fn main() -> anyhow::Result<()> {
 
     let peers = args.peers;
 
-    Node::run(
-        Arc::new(Mutex::new(Node::new(addr, peers))),
-        TokioSleeper {},
-    )
-    .await?;
+    Node::run(Arc::new(Mutex::new(Node::new(addr, peers)))).await?;
 
     Ok(())
 }
