@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
@@ -14,15 +16,21 @@ use tonic;
 
 use log::debug;
 
-use crate::Node;
+use crate::{Node, Sleeper};
 
 #[derive(Debug)]
-pub struct Heartbeater {
-    pub node: Arc<Mutex<Node>>,
+pub struct Heartbeater<S>
+where
+    S: Sleeper,
+{
+    pub node: Arc<Mutex<Node<S>>>,
 }
 
 #[tonic::async_trait]
-impl Heartbeat for Heartbeater {
+impl<S> Heartbeat for Heartbeater<S>
+where
+    S: Sleeper,
+{
     async fn heartbeat(
         &self,
         request: Request<HeartbeatRequest>,
