@@ -1,6 +1,10 @@
-# Rust implementation of Raft consensus algorithm
+# ! Work in progress ! Rust implementation of Raft consensus algorithm
 
-For studying purpose
+## Why
+
+Studying and learning purposes
+
+## Docs
 
 [Raft algorithm](https://raft.github.io/raft.pdf)
 
@@ -13,11 +17,24 @@ RUST_LOG=info cargo run -- -p http://[::1]:50050 -a [::1]:50051
 RUST_LOG=info cargo run -- -p http://[::1]:50051 -a [::1]:50050
 ```
 
-# Current state
+If you have `gnome-terminal` installed you can run the helper script
+
+```sh
+make 5terminals
+```
+
+# Features
+
+## Current state
 
 - [x] Leader election
 
-# Future ideas
+## Future ideas
 
 - [ ] Run in Kubernetes
 - [ ] Implement key value store
+
+# Technical code ideas
+
+- [ ] Improve code splitting and organization
+- [ ] Dependency Injection for testing
