@@ -41,10 +41,10 @@ where
 
         if request.get_ref().term > node.term {
             node.term = request.get_ref().term;
-            node.node_type = NodeType::Follower;
         }
 
         if request.get_ref().term >= node.term {
+            node.node_type = NodeType::Follower;
             node.heart_beat_event_sender.send_modify(|x| *x = *x + 1);
         }
 
@@ -63,17 +63,21 @@ where
 
         let mut node = self.node.lock().await;
 
-        if request.get_ref().term > node.term {
-            node.term = request.get_ref().term;
-            node.node_type = NodeType::Follower;
-        }
-
         let grant_vote = node.last_voted_for_term < Some(request.get_ref().term);
 
         let reply = RequestVoteReply {
             vote_granted: grant_vote,
             term: node.term,
         };
+
+        if grant_vote {
+            node.last_voted_for_term = Some(request.get_ref().term);
+        }
+
+        if request.get_ref().term > node.term {
+            node.term = request.get_ref().term;
+            node.node_type = NodeType::Follower;
+        }
 
         Ok(Response::new(reply))
     }

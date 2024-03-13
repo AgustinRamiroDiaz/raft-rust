@@ -44,8 +44,8 @@ pub(crate) struct Node<S>
 where
     S: Sleeper,
 {
-    pub(crate) address: SocketAddr,
-    pub(crate) peers: Vec<String>,
+    address: SocketAddr,
+    peers: Vec<String>,
     pub(crate) node_type: NodeType,
     pub(crate) last_heartbeat: Instant, // TODO: maybe we can remove this field an rely only in the channels
     pub(crate) term: u64,
@@ -53,6 +53,7 @@ where
     pub(crate) heart_beat_event_sender: watch::Sender<HeartBeatEvent>,
     pub(crate) heart_beat_event_receiver: watch::Receiver<HeartBeatEvent>,
     pub(crate) sleeper: S,
+    get_candidate_sleep_time: fn() -> Duration,
 }
 
 impl Node<TokioSleeper> {
@@ -69,6 +70,7 @@ impl Node<TokioSleeper> {
             heart_beat_event_sender,
             heart_beat_event_receiver,
             sleeper: TokioSleeper {},
+            get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..81)),
         }
     }
 }
@@ -166,7 +168,7 @@ where
                                 _ = rx => {
                                     info!("Node type changed");
                                 }
-                                _ = tokio::time::sleep(Duration::from_millis( thread_rng().gen_range(90..110))) => {
+                                _ = tokio::time::sleep((node.lock().await.get_candidate_sleep_time)()) => {
                                 }
                             }
                         }
@@ -268,6 +270,7 @@ pub(crate) mod tests {
             sleeper: MockSleeper {
                 modify_duration: |x| 0 * x,
             },
+            get_candidate_sleep_time: || Duration::from_millis(0),
         };
 
         let node = Arc::new(Mutex::new(node));
