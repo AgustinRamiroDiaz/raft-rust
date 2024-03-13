@@ -1,8 +1,7 @@
-use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 use tonic::{Request, Response, Status};
 
 use main_grpc::heartbeat_server::Heartbeat;
@@ -16,7 +15,8 @@ use tonic;
 
 use log::debug;
 
-use crate::{Node, Sleeper};
+use crate::node::Sleeper;
+use crate::node::{Node, NodeType};
 
 #[derive(Debug)]
 pub struct Heartbeater<S>
@@ -41,14 +41,14 @@ where
 
         if request.get_ref().term > node.term {
             node.term = request.get_ref().term;
-            node.node_type = crate::NodeType::Follower;
+            node.node_type = NodeType::Follower;
         }
 
         if request.get_ref().term >= node.term {
             node.heart_beat_event_sender.send_modify(|x| *x = *x + 1);
         }
 
-        node.last_heartbeat = tokio::time::Instant::now();
+        node.last_heartbeat = Instant::now();
 
         let reply = main_grpc::HeartbeatReply {};
 
@@ -65,7 +65,7 @@ where
 
         if request.get_ref().term > node.term {
             node.term = request.get_ref().term;
-            node.node_type = crate::NodeType::Follower;
+            node.node_type = NodeType::Follower;
         }
 
         let grant_vote = node.last_voted_for_term < Some(request.get_ref().term);
