@@ -11,7 +11,7 @@ use rand::{thread_rng, Rng};
 use tokio::{
     select,
     sync::{oneshot, watch, Mutex},
-    time::Instant,
+    time::{Instant, Sleep},
 };
 use tonic::transport::Server;
 
@@ -24,25 +24,12 @@ pub(crate) enum NodeType {
     Leader,
 }
 
-pub trait Sleeper: Send + 'static {
-    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send;
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct TokioSleeper {}
-
-impl Sleeper for TokioSleeper {
-    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
-        tokio::time::sleep(duration)
-    }
-}
-
 pub(crate) type HeartBeatEvent = u64;
 
 #[derive(Debug)]
-pub(crate) struct Node<S>
+pub(crate) struct Node<SO>
 where
-    S: Sleeper,
+    SO: Future<Output = ()>,
 {
     address: SocketAddr,
     peers: Vec<String>,
@@ -52,11 +39,11 @@ where
     pub(crate) last_voted_for_term: Option<u64>,
     pub(crate) heart_beat_event_sender: watch::Sender<HeartBeatEvent>,
     pub(crate) heart_beat_event_receiver: watch::Receiver<HeartBeatEvent>,
-    pub(crate) sleeper: S,
+    pub(crate) _sleep: fn(Duration) -> SO,
     get_candidate_sleep_time: fn() -> Duration,
 }
 
-impl Node<TokioSleeper> {
+impl Node<Sleep> {
     pub(crate) fn new(address: SocketAddr, peers: Vec<String>) -> Self {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
 
@@ -69,20 +56,20 @@ impl Node<TokioSleeper> {
             last_voted_for_term: None,
             heart_beat_event_sender,
             heart_beat_event_receiver,
-            sleeper: TokioSleeper {},
+            _sleep: tokio::time::sleep,
             get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..120)),
         }
     }
 }
 
-impl<S> Node<S>
+impl<SO> Node<SO>
 where
-    S: Sleeper + Clone + Copy + Sync,
+    SO: Future<Output = ()> + Send + 'static,
 {
     pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
 
-        let sleeper = node.lock().await.sleeper.clone();
+        let _sleep = node.lock().await._sleep.clone();
 
         let _node = node.clone();
         let client_thread = tokio::spawn(async move {
@@ -94,7 +81,7 @@ where
                     let node = _node;
                     let last_node_type = node.lock().await.node_type.clone();
                     loop {
-                        sleeper.sleep(Duration::from_millis(10)).await;
+                        _sleep(Duration::from_millis(10)).await;
                         if last_node_type != node.lock().await.node_type {
                             tx.send(()).unwrap_or_default();
                             break;
@@ -113,7 +100,7 @@ where
                         let mut receiver = node.lock().await.heart_beat_event_receiver.clone();
                         info!("Last heartbeat seen {}! ", *receiver.borrow_and_update());
                         select! {
-                            _ = sleeper.sleep(Duration::from_secs(2)) => {
+                            _ = _sleep(Duration::from_secs(2)) => {
                                 warn!("Didn't receive a heartbeat in 2 seconds");
                                 node.lock().await.node_type = NodeType::Candidate;
                             }
@@ -168,7 +155,7 @@ where
                                 _ = rx => {
                                     info!("Node type changed");
                                 }
-                                _ = sleeper.sleep((node.lock().await.get_candidate_sleep_time)()) => {
+                                _ = _sleep((node.lock().await.get_candidate_sleep_time)()) => {
                                 }
                             }
                         }
@@ -204,7 +191,7 @@ where
                             _ = rx => {
                                 info!("Node type changed");
                             }
-                            _ = sleeper.sleep(Duration::from_millis(500)) => {
+                            _ = _sleep(Duration::from_millis(500)) => {
                             }
                         }
                     }
@@ -236,23 +223,6 @@ pub(crate) mod tests {
 
     use super::*;
 
-    #[derive(Clone, Copy)]
-    struct MockSleeper<F>
-    where
-        F: Fn(Duration) -> Duration,
-    {
-        modify_duration: F,
-    }
-
-    impl<F> Sleeper for MockSleeper<F>
-    where
-        F: Fn(Duration) -> Duration + Send + 'static,
-    {
-        fn sleep(&self, duration: Duration) -> impl std::future::Future<Output = ()> + Send {
-            tokio::time::sleep((self.modify_duration)(duration))
-        }
-    }
-
     #[tokio::test]
     async fn becomes_candidate_when_no_heartbeats() -> anyhow::Result<()> {
         let socket = "[::1]:50000".parse()?;
@@ -267,9 +237,7 @@ pub(crate) mod tests {
             last_voted_for_term: None,
             heart_beat_event_sender,
             heart_beat_event_receiver,
-            sleeper: MockSleeper {
-                modify_duration: |x| 0 * x,
-            },
+            _sleep: |_| async move {},
             get_candidate_sleep_time: || Duration::from_millis(0),
         };
 
