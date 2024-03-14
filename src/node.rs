@@ -70,7 +70,7 @@ impl Node<TokioSleeper> {
             heart_beat_event_sender,
             heart_beat_event_receiver,
             sleeper: TokioSleeper {},
-            get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..81)),
+            get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..120)),
         }
     }
 }
