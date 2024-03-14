@@ -11,7 +11,7 @@ use rand::{thread_rng, Rng};
 use tokio::{
     select,
     sync::{oneshot, watch, Mutex},
-    time::{sleep, Instant},
+    time::Instant,
 };
 use tonic::transport::Server;
 
@@ -28,7 +28,7 @@ pub trait Sleeper: Send + 'static {
     fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub(crate) struct TokioSleeper {}
 
 impl Sleeper for TokioSleeper {
@@ -77,10 +77,12 @@ impl Node<TokioSleeper> {
 
 impl<S> Node<S>
 where
-    S: Sleeper + Clone,
+    S: Sleeper + Clone + Copy + Sync,
 {
     pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
+
+        let sleeper = node.lock().await.sleeper.clone();
 
         let _node = node.clone();
         let client_thread = tokio::spawn(async move {
@@ -92,14 +94,13 @@ where
                     let node = _node;
                     let last_node_type = node.lock().await.node_type.clone();
                     loop {
-                        sleep(Duration::from_millis(10)).await;
+                        sleeper.sleep(Duration::from_millis(10)).await;
                         if last_node_type != node.lock().await.node_type {
                             tx.send(()).unwrap_or_default();
                             break;
                         }
                     }
                 });
-
                 match node_type {
                     NodeType::Follower => {
                         info!("I'm a follower");
@@ -110,7 +111,6 @@ where
                         // We are cloning them in order to release the lock, since having references doesn't drop the guard
                         // There might be an alternative: using multiple Arc<Mutex>> for each field, since they all have different purposes and aren't strictly bundled
                         let mut receiver = node.lock().await.heart_beat_event_receiver.clone();
-                        let sleeper = node.lock().await.sleeper.clone();
                         info!("Last heartbeat seen {}! ", *receiver.borrow_and_update());
                         select! {
                             _ = sleeper.sleep(Duration::from_secs(2)) => {
@@ -168,7 +168,7 @@ where
                                 _ = rx => {
                                     info!("Node type changed");
                                 }
-                                _ = tokio::time::sleep((node.lock().await.get_candidate_sleep_time)()) => {
+                                _ = sleeper.sleep((node.lock().await.get_candidate_sleep_time)()) => {
                                 }
                             }
                         }
@@ -204,7 +204,7 @@ where
                             _ = rx => {
                                 info!("Node type changed");
                             }
-                            _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                            _ = sleeper.sleep(Duration::from_millis(500)) => {
                             }
                         }
                     }
@@ -232,11 +232,11 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use anyhow::Ok;
-    use tokio::spawn;
+    use tokio::{spawn, time::sleep};
 
     use super::*;
 
-    #[derive(Clone)]
+    #[derive(Clone, Copy)]
     struct MockSleeper<F>
     where
         F: Fn(Duration) -> Duration,
@@ -277,11 +277,11 @@ pub(crate) mod tests {
 
         spawn(Node::run(node.clone()));
         spawn(async {
-            sleep(Duration::from_millis(300)).await;
+            sleep(Duration::from_millis(100)).await;
             panic!("Test is taking too long, probably a deadlock")
         });
 
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(10)).await;
 
         assert_ne!(node.lock().await.node_type, NodeType::Follower);
 
