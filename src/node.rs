@@ -10,7 +10,7 @@ use log::{debug, info, warn};
 use rand::{thread_rng, Rng};
 use tokio::{
     select,
-    sync::{oneshot, watch, Mutex},
+    sync::{watch, Mutex},
     time::{Instant, Sleep},
 };
 use tonic::transport::Server;
@@ -33,7 +33,7 @@ where
 {
     address: SocketAddr,
     peers: Vec<String>,
-    pub(crate) node_type: NodeType,
+    node_type: NodeType, // TODO: hide this field so it can only be changed through the change_node_type method
     pub(crate) last_heartbeat: Instant, // TODO: maybe we can remove this field an rely only in the channels
     pub(crate) term: u64,
     pub(crate) last_voted_for_term: Option<u64>,
@@ -245,6 +245,11 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn becomes_candidate_when_no_heartbeats() -> anyhow::Result<()> {
+        spawn(async {
+            sleep(Duration::from_millis(100)).await;
+            panic!("Test is taking too long, probably a deadlock")
+        });
+
         let socket = "[::1]:50000".parse()?;
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
@@ -265,14 +270,12 @@ pub(crate) mod tests {
         };
 
         let node = Arc::new(Mutex::new(node));
+        let mut node_type_changed_event_receiver =
+            node.lock().await.node_type_changed_event_receiver.clone();
 
         spawn(Node::run(node.clone()));
-        spawn(async {
-            sleep(Duration::from_millis(100)).await;
-            panic!("Test is taking too long, probably a deadlock")
-        });
 
-        sleep(Duration::from_millis(10)).await;
+        node_type_changed_event_receiver.changed().await?;
 
         assert_ne!(node.lock().await.node_type, NodeType::Follower);
 
