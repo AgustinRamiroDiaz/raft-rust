@@ -39,13 +39,37 @@ where
     pub(crate) last_voted_for_term: Option<u64>,
     pub(crate) heart_beat_event_sender: watch::Sender<HeartBeatEvent>,
     pub(crate) heart_beat_event_receiver: watch::Receiver<HeartBeatEvent>,
+    node_type_changed_event_sender: watch::Sender<()>,
+    node_type_changed_event_receiver: watch::Receiver<()>,
     pub(crate) _sleep: fn(Duration) -> SO,
     get_candidate_sleep_time: fn() -> Duration,
+}
+
+impl<SO> Node<SO>
+where
+    SO: Future<Output = ()>,
+{
+    pub(crate) fn change_node_type(
+        &mut self,
+        node_type: NodeType,
+    ) -> Result<(), watch::error::SendError<()>> {
+        if self.node_type != node_type {
+            info!(
+                "Node type changed from {:?} to {:?}",
+                self.node_type, node_type
+            );
+            self.node_type = node_type;
+            return self.node_type_changed_event_sender.send(());
+        }
+
+        Ok(())
+    }
 }
 
 impl Node<Sleep> {
     pub(crate) fn new(address: SocketAddr, peers: Vec<String>) -> Self {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
+        let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
         Self {
             address,
@@ -58,6 +82,8 @@ impl Node<Sleep> {
             heart_beat_event_receiver,
             _sleep: tokio::time::sleep,
             get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..120)),
+            node_type_changed_event_receiver,
+            node_type_changed_event_sender,
         }
     }
 }
@@ -73,38 +99,31 @@ where
 
         let _node = node.clone();
         let client_thread = tokio::spawn(async move {
+            // TODO: review
+            // We are cloning them in order to release the lock, since having references doesn't drop the guard
+            // There might be an alternative: using multiple Arc<Mutex>> for each field, since they all have different purposes and aren't strictly bundled
+            let mut heart_beat_event_receiver = node.lock().await.heart_beat_event_receiver.clone();
+            let mut node_type_changed_event_receiver =
+                node.lock().await.node_type_changed_event_receiver.clone();
             loop {
                 let node_type = node.lock().await.node_type.clone();
-                let _node = node.clone();
-                let (tx, rx) = oneshot::channel::<()>(); // Node type change signal
-                tokio::spawn(async move {
-                    let node = _node;
-                    let last_node_type = node.lock().await.node_type.clone();
-                    loop {
-                        _sleep(Duration::from_millis(10)).await;
-                        if last_node_type != node.lock().await.node_type {
-                            tx.send(()).unwrap_or_default();
-                            break;
-                        }
-                    }
-                });
+
                 match node_type {
                     NodeType::Follower => {
                         info!("I'm a follower");
 
                         info!("Waiting for heartbeats");
 
-                        // TODO: review
-                        // We are cloning them in order to release the lock, since having references doesn't drop the guard
-                        // There might be an alternative: using multiple Arc<Mutex>> for each field, since they all have different purposes and aren't strictly bundled
-                        let mut receiver = node.lock().await.heart_beat_event_receiver.clone();
-                        info!("Last heartbeat seen {}! ", *receiver.borrow_and_update());
+                        info!(
+                            "Last heartbeat seen {}! ",
+                            *heart_beat_event_receiver.borrow_and_update()
+                        );
                         select! {
                             _ = _sleep(Duration::from_secs(2)) => {
                                 warn!("Didn't receive a heartbeat in 2 seconds");
-                                node.lock().await.node_type = NodeType::Candidate;
+                                node.lock().await.change_node_type(NodeType::Candidate).unwrap();
                             }
-                            _ = receiver.changed() => {
+                            _ = heart_beat_event_receiver.changed() => {
                                 info!("Heartbeat event received");
                             }
                         }
@@ -148,12 +167,14 @@ where
 
                         if total_votes > (peers.len() + 1) / 2 {
                             info!("I'm a leader now");
-                            node.lock().await.node_type = NodeType::Leader;
+                            node.lock()
+                                .await
+                                .change_node_type(NodeType::Leader)
+                                .unwrap();
                         } else {
                             info!("Waiting to request votes again");
                             select! {
-                                _ = rx => {
-                                    info!("Node type changed");
+                                _ = node_type_changed_event_receiver.changed() => {
                                 }
                                 _ = _sleep((node.lock().await.get_candidate_sleep_time)()) => {
                                 }
@@ -188,8 +209,7 @@ where
 
                         info!("Waiting to send heartbeats again");
                         select! {
-                            _ = rx => {
-                                info!("Node type changed");
+                            _ = node_type_changed_event_receiver.changed() => {
                             }
                             _ = _sleep(Duration::from_millis(500)) => {
                             }
@@ -227,6 +247,7 @@ pub(crate) mod tests {
     async fn becomes_candidate_when_no_heartbeats() -> anyhow::Result<()> {
         let socket = "[::1]:50000".parse()?;
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
+        let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
         let node = Node {
             address: socket,
@@ -239,6 +260,8 @@ pub(crate) mod tests {
             heart_beat_event_receiver,
             _sleep: |_| async move {},
             get_candidate_sleep_time: || Duration::from_millis(0),
+            node_type_changed_event_sender,
+            node_type_changed_event_receiver,
         };
 
         let node = Arc::new(Mutex::new(node));
