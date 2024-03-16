@@ -1,4 +1,4 @@
-use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration, vec};
 
 use crate::server::{
     main_grpc::{
@@ -13,7 +13,7 @@ use tokio::{
     sync::{watch, Mutex},
     time::{Instant, Sleep},
 };
-use tonic::transport::Server;
+use tonic::transport::{Channel, Server};
 
 use crate::server::main_grpc::RequestVoteRequest;
 
@@ -27,9 +27,10 @@ pub(crate) enum NodeType {
 pub(crate) type HeartBeatEvent = u64;
 
 #[derive(Debug)]
-pub(crate) struct Node<SO>
-where
-    SO: Future<Output = ()>,
+pub(crate) struct Node<SO, PCO>
+// where
+//     SO: Future<Output = ()>,
+//     PCO: Future<Output = Result<HeartbeatClient<Channel>, tonic::transport::Error>>,
 {
     address: SocketAddr,
     peers: Vec<String>,
@@ -43,12 +44,10 @@ where
     node_type_changed_event_receiver: watch::Receiver<()>,
     pub(crate) _sleep: fn(Duration) -> SO,
     get_candidate_sleep_time: fn() -> Duration,
+    peers_clients: fn() -> PCO,
 }
 
-impl<SO> Node<SO>
-where
-    SO: Future<Output = ()>,
-{
+impl<SO, PCO> Node<SO, PCO> {
     pub(crate) fn change_node_type(
         &mut self,
         node_type: NodeType,
@@ -66,31 +65,41 @@ where
     }
 }
 
-impl Node<Sleep> {
-    pub(crate) fn new(address: SocketAddr, peers: Vec<String>) -> Self {
-        let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
-        let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
+// impl<PCO> Node<Sleep, PCO> {
+//     pub(crate) fn new(address: SocketAddr, peers: Vec<String>) -> Self {
+//         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
+//         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
-        Self {
-            address,
-            peers,
-            node_type: NodeType::Follower,
-            last_heartbeat: Instant::now(),
-            term: 0,
-            last_voted_for_term: None,
-            heart_beat_event_sender,
-            heart_beat_event_receiver,
-            _sleep: tokio::time::sleep,
-            get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..120)),
-            node_type_changed_event_receiver,
-            node_type_changed_event_sender,
-        }
-    }
-}
+//         // let peers_clients = peers
+//         //     .into_iter()
+//         //     .map(|p| move || HeartbeatClient::connect(p))
+//         //     .collect();
 
-impl<SO> Node<SO>
+//         let peers_clients = || HeartbeatClient::connect("");
+
+//         Self {
+//             address,
+//             peers,
+//             node_type: NodeType::Follower,
+//             last_heartbeat: Instant::now(),
+//             term: 0,
+//             last_voted_for_term: None,
+//             heart_beat_event_sender,
+//             heart_beat_event_receiver,
+//             _sleep: tokio::time::sleep,
+//             get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..120)),
+//             node_type_changed_event_receiver,
+//             node_type_changed_event_sender,
+//             peers_clients,
+//         }
+//     }
+// }
+
+impl<SO, PCO> Node<SO, PCO>
 where
     SO: Future<Output = ()> + Send + 'static,
+    PCO:
+        Future<Output = Result<HeartbeatClient<Channel>, tonic::transport::Error>> + 'static + Send,
 {
     pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
@@ -236,7 +245,7 @@ where
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, vec};
 
     use anyhow::Ok;
     use tokio::{spawn, time::sleep};
@@ -254,6 +263,9 @@ pub(crate) mod tests {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
+        let peers_clients = || HeartbeatClient::connect("");
+
+        let _sleep = |_| async {};
         let node = Node {
             address: socket,
             peers: vec![],
@@ -263,10 +275,11 @@ pub(crate) mod tests {
             last_voted_for_term: None,
             heart_beat_event_sender,
             heart_beat_event_receiver,
-            _sleep: |_| async move {},
+            _sleep,
             get_candidate_sleep_time: || Duration::from_millis(0),
             node_type_changed_event_sender,
             node_type_changed_event_receiver,
+            peers_clients,
         };
 
         let node = Arc::new(Mutex::new(node));

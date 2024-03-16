@@ -14,11 +14,11 @@ async fn main() -> anyhow::Result<()> {
 
     let args = arguments::Args::parse();
 
-    let addr = args.address.parse()?;
+    // let addr = args.address.parse()?;
 
     let peers = args.peers;
 
-    node::Node::run(Arc::new(Mutex::new(Node::new(addr, peers)))).await?;
+    // node::Node::run(Arc::new(Mutex::new(Node::new(addr, peers)))).await?;
 
     Ok(())
 }
