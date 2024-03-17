@@ -38,7 +38,7 @@ pub(crate) struct Node<SO, PCO> {
     node_type_changed_event_receiver: watch::Receiver<()>,
     pub(crate) _sleep: fn(Duration) -> SO,
     get_candidate_sleep_time: fn() -> Duration,
-    peers_clients: fn(String) -> PCO,
+    get_client: fn(String) -> PCO,
 }
 
 impl<SO, PCO> Node<SO, PCO> {
@@ -81,7 +81,7 @@ impl<PCO> Node<Sleep, PCO> {
             get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..120)),
             node_type_changed_event_receiver,
             node_type_changed_event_sender,
-            peers_clients: get_client,
+            get_client,
         }
     }
 }
@@ -93,7 +93,7 @@ where
 {
     pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
-        let get_client = node.lock().await.peers_clients.clone();
+        let get_client = node.lock().await.get_client.clone();
 
         let _sleep = node.lock().await._sleep.clone();
 
@@ -254,7 +254,7 @@ pub(crate) mod tests {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
-        let peers_clients = |s| RaftClient::connect(s);
+        let get_client = |s| RaftClient::connect(s);
 
         let _sleep = |_| async {};
         let node = Node {
@@ -270,7 +270,7 @@ pub(crate) mod tests {
             get_candidate_sleep_time: || Duration::from_millis(0),
             node_type_changed_event_sender,
             node_type_changed_event_receiver,
-            peers_clients,
+            get_client,
         };
 
         let node = Arc::new(Mutex::new(node));
