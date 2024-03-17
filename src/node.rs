@@ -1,4 +1,4 @@
-use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration, vec};
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use crate::server::{
     main_grpc::{
@@ -27,11 +27,7 @@ pub(crate) enum NodeType {
 pub(crate) type HeartBeatEvent = u64;
 
 #[derive(Debug)]
-pub(crate) struct Node<SO, PCO>
-// where
-//     SO: Future<Output = ()>,
-//     PCO: Future<Output = Result<HeartbeatClient<Channel>, tonic::transport::Error>>,
-{
+pub(crate) struct Node<SO, PCO> {
     address: SocketAddr,
     peers: Vec<String>,
     node_type: NodeType, // TODO: hide this field so it can only be changed through the change_node_type method
@@ -44,7 +40,7 @@ pub(crate) struct Node<SO, PCO>
     node_type_changed_event_receiver: watch::Receiver<()>,
     pub(crate) _sleep: fn(Duration) -> SO,
     get_candidate_sleep_time: fn() -> Duration,
-    peers_clients: fn() -> PCO,
+    peers_clients: fn(String) -> PCO,
 }
 
 impl<SO, PCO> Node<SO, PCO> {
@@ -65,35 +61,32 @@ impl<SO, PCO> Node<SO, PCO> {
     }
 }
 
-// impl<PCO> Node<Sleep, PCO> {
-//     pub(crate) fn new(address: SocketAddr, peers: Vec<String>) -> Self {
-//         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
-//         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
+impl<PCO> Node<Sleep, PCO> {
+    pub(crate) fn new(
+        address: SocketAddr,
+        peers: Vec<String>,
+        get_client: fn(String) -> PCO,
+    ) -> Self {
+        let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
+        let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
-//         // let peers_clients = peers
-//         //     .into_iter()
-//         //     .map(|p| move || HeartbeatClient::connect(p))
-//         //     .collect();
-
-//         let peers_clients = || HeartbeatClient::connect("");
-
-//         Self {
-//             address,
-//             peers,
-//             node_type: NodeType::Follower,
-//             last_heartbeat: Instant::now(),
-//             term: 0,
-//             last_voted_for_term: None,
-//             heart_beat_event_sender,
-//             heart_beat_event_receiver,
-//             _sleep: tokio::time::sleep,
-//             get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..120)),
-//             node_type_changed_event_receiver,
-//             node_type_changed_event_sender,
-//             peers_clients,
-//         }
-//     }
-// }
+        Self {
+            address,
+            peers,
+            node_type: NodeType::Follower,
+            last_heartbeat: Instant::now(),
+            term: 0,
+            last_voted_for_term: None,
+            heart_beat_event_sender,
+            heart_beat_event_receiver,
+            _sleep: tokio::time::sleep,
+            get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..120)),
+            node_type_changed_event_receiver,
+            node_type_changed_event_sender,
+            peers_clients: get_client,
+        }
+    }
+}
 
 impl<SO, PCO> Node<SO, PCO>
 where
@@ -103,6 +96,7 @@ where
 {
     pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
+        let get_client = node.lock().await.peers_clients.clone();
 
         let _sleep = node.lock().await._sleep.clone();
 
@@ -148,7 +142,7 @@ where
 
                         let mut total_votes = 1; // I vote for myself
                         for peer in &peers {
-                            let mut client = match HeartbeatClient::connect(peer.clone()).await {
+                            let mut client = match get_client(peer.clone()).await {
                                 Ok(client) => client,
                                 Err(e) => {
                                     warn!("Failed to connect to {}: {:?}", &peer, e);
@@ -194,7 +188,7 @@ where
                         info!("I'm a leader");
                         info!("Sending heartbeats");
                         for peer in &peers {
-                            let mut client = match HeartbeatClient::connect(peer.clone()).await {
+                            let mut client = match get_client(peer.clone()).await {
                                 Ok(client) => client,
                                 Err(e) => {
                                     warn!("Failed to connect to {}: {:?}", &peer, e);
@@ -263,7 +257,7 @@ pub(crate) mod tests {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
-        let peers_clients = || HeartbeatClient::connect("");
+        let peers_clients = |s| HeartbeatClient::connect(s);
 
         let _sleep = |_| async {};
         let node = Node {
