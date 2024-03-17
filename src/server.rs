@@ -5,9 +5,9 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tonic::{Request, Response, Status};
 
-use main_grpc::heartbeat_server::Heartbeat;
-
-use main_grpc::{HeartbeatReply, HeartbeatRequest, RequestVoteReply, RequestVoteRequest};
+use main_grpc::{
+    raft_server::Raft, HeartbeatReply, HeartbeatRequest, RequestVoteReply, RequestVoteRequest,
+};
 pub mod main_grpc {
     tonic::include_proto!("main");
 }
@@ -24,7 +24,7 @@ pub struct Heartbeater<SO, PCO> {
 }
 
 #[tonic::async_trait]
-impl<SO, PCO> Heartbeat for Heartbeater<SO, PCO>
+impl<SO, PCO> Raft for Heartbeater<SO, PCO>
 where
     SO: Future<Output = ()> + Send + 'static,
     PCO: Send + 'static,

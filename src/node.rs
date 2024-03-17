@@ -1,9 +1,7 @@
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use crate::server::{
-    main_grpc::{
-        heartbeat_client::HeartbeatClient, heartbeat_server::HeartbeatServer, HeartbeatRequest,
-    },
+    main_grpc::{raft_client::RaftClient, raft_server::RaftServer, HeartbeatRequest},
     Heartbeater,
 };
 use log::{debug, info, warn};
@@ -91,8 +89,7 @@ impl<PCO> Node<Sleep, PCO> {
 impl<SO, PCO> Node<SO, PCO>
 where
     SO: Future<Output = ()> + Send + 'static,
-    PCO:
-        Future<Output = Result<HeartbeatClient<Channel>, tonic::transport::Error>> + 'static + Send,
+    PCO: Future<Output = Result<RaftClient<Channel>, tonic::transport::Error>> + 'static + Send,
 {
     pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
@@ -225,7 +222,7 @@ where
         let node = _node;
 
         let server_thread = Server::builder()
-            .add_service(HeartbeatServer::new(Heartbeater { node: node.clone() }))
+            .add_service(RaftServer::new(Heartbeater { node: node.clone() }))
             .serve(node.lock().await.address);
 
         let (client_status, server_status) = tokio::join!(client_thread, server_thread);
@@ -257,7 +254,7 @@ pub(crate) mod tests {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
-        let peers_clients = |s| HeartbeatClient::connect(s);
+        let peers_clients = |s| RaftClient::connect(s);
 
         let _sleep = |_| async {};
         let node = Node {
