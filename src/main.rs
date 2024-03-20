@@ -1,8 +1,9 @@
 mod arguments;
 mod node;
 mod server;
+mod state_machine;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use clap::Parser;
 use node::Node;
@@ -21,7 +22,15 @@ async fn main() -> anyhow::Result<()> {
 
     let peers_clients = |peer| RaftClient::connect(peer);
 
-    node::Node::run(Arc::new(Mutex::new(Node::new(addr, peers, peers_clients)))).await?;
+    let my_state_machine: HashMap<u8, u8> = HashMap::new();
+
+    node::Node::run(Arc::new(Mutex::new(Node::new(
+        addr,
+        peers,
+        peers_clients,
+        my_state_machine,
+    ))))
+    .await?;
 
     Ok(())
 }

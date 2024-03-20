@@ -1,8 +1,11 @@
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
-use crate::server::{
-    main_grpc::{raft_client::RaftClient, raft_server::RaftServer, HeartbeatRequest},
-    Heartbeater,
+use crate::{
+    server::{
+        main_grpc::{raft_client::RaftClient, raft_server::RaftServer, HeartbeatRequest},
+        Heartbeater,
+    },
+    state_machine::{self, StateMachine},
 };
 use log::{debug, info, warn};
 use rand::{thread_rng, Rng};
@@ -25,7 +28,7 @@ pub(crate) enum NodeType {
 pub(crate) type HeartBeatEvent = u64;
 
 #[derive(Debug)]
-pub(crate) struct Node<SO, PCO> {
+pub(crate) struct Node<SO, PCO, SM> {
     address: SocketAddr,
     peers: Vec<String>,
     node_type: NodeType, // TODO: hide this field so it can only be changed through the change_node_type method
@@ -39,9 +42,10 @@ pub(crate) struct Node<SO, PCO> {
     pub(crate) _sleep: fn(Duration) -> SO,
     get_candidate_sleep_time: fn() -> Duration,
     get_client: fn(String) -> PCO,
+    state_machine: SM,
 }
 
-impl<SO, PCO> Node<SO, PCO> {
+impl<SO, PCO, SM> Node<SO, PCO, SM> {
     pub(crate) fn change_node_type(
         &mut self,
         node_type: NodeType,
@@ -59,11 +63,15 @@ impl<SO, PCO> Node<SO, PCO> {
     }
 }
 
-impl<PCO> Node<Sleep, PCO> {
+impl<PCO, SM> Node<Sleep, PCO, SM>
+where
+    SM: StateMachine + Sync,
+{
     pub(crate) fn new(
         address: SocketAddr,
         peers: Vec<String>,
         get_client: fn(String) -> PCO,
+        state_machine: SM,
     ) -> Self {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
@@ -82,14 +90,16 @@ impl<PCO> Node<Sleep, PCO> {
             node_type_changed_event_receiver,
             node_type_changed_event_sender,
             get_client,
+            state_machine,
         }
     }
 }
 
-impl<SO, PCO> Node<SO, PCO>
+impl<SO, PCO, SM> Node<SO, PCO, SM>
 where
     SO: Future<Output = ()> + Send + 'static,
     PCO: Future<Output = Result<RaftClient<Channel>, tonic::transport::Error>> + 'static + Send,
+    SM: Send + 'static,
 {
     pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
@@ -236,7 +246,7 @@ where
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::{sync::Arc, vec};
+    use std::{collections::HashMap, sync::Arc, vec};
 
     use anyhow::Ok;
     use tokio::{spawn, time::sleep};
@@ -255,6 +265,7 @@ pub(crate) mod tests {
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
         let get_client = |s| RaftClient::connect(s);
+        let my_state_machine: HashMap<u8, u8> = HashMap::new();
 
         let _sleep = |_| async {};
         let node = Node {
@@ -271,6 +282,7 @@ pub(crate) mod tests {
             node_type_changed_event_sender,
             node_type_changed_event_receiver,
             get_client,
+            state_machine: my_state_machine,
         };
 
         let node = Arc::new(Mutex::new(node));

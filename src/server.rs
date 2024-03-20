@@ -19,15 +19,16 @@ use log::debug;
 use crate::node::{Node, NodeType};
 
 #[derive(Debug)]
-pub struct Heartbeater<SO, PCO> {
-    pub node: Arc<Mutex<Node<SO, PCO>>>,
+pub struct Heartbeater<SO, PCO, SM> {
+    pub node: Arc<Mutex<Node<SO, PCO, SM>>>,
 }
 
 #[tonic::async_trait]
-impl<SO, PCO> Raft for Heartbeater<SO, PCO>
+impl<SO, PCO, SM> Raft for Heartbeater<SO, PCO, SM>
 where
     SO: Future<Output = ()> + Send + 'static,
     PCO: Send + 'static,
+    SM: Send + 'static,
 {
     async fn heartbeat(
         &self,
