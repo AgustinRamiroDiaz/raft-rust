@@ -32,6 +32,9 @@ make 5terminals
 ## Future ideas
 
 - [ ] Run in Kubernetes
+
+## In development
+
 - [ ] Implement key value store
 
 # Technical code ideas

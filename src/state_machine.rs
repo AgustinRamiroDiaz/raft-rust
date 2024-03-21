@@ -1,5 +1,7 @@
 use std::{collections::HashMap, hash::Hash};
 
+use serde::{Deserialize, Serialize};
+
 pub(crate) trait StateMachine {
     type State;
     type Event;
@@ -7,6 +9,7 @@ pub(crate) trait StateMachine {
     fn apply(&mut self, event: Self::Event);
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) enum HashMapStateMachineEvent<K, V> {
     Put(K, V),
     Delete(K),

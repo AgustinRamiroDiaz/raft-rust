@@ -2,13 +2,14 @@ use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use crate::{
     server::{
-        main_grpc::{raft_client::RaftClient, raft_server::RaftServer, HeartbeatRequest},
+        main_grpc::{raft_client::RaftClient, raft_server::RaftServer, Entry, HeartbeatRequest},
         Heartbeater,
     },
-    state_machine::{self, StateMachine},
+    state_machine::{HashMapStateMachineEvent, StateMachine},
 };
 use log::{debug, info, warn};
 use rand::{thread_rng, Rng};
+use serde::Serialize;
 use tokio::{
     select,
     sync::{watch, Mutex},
@@ -27,8 +28,41 @@ pub(crate) enum NodeType {
 
 pub(crate) type HeartBeatEvent = u64;
 
+#[derive(Debug, Clone)]
+pub(crate) struct LogEntry<T> {
+    term: u64,
+    index: u64,
+    command: T,
+}
+// TODO: change for TryInto and TryFrom
+impl<T> Into<Entry> for LogEntry<T>
+where
+    T: Serialize,
+{
+    fn into(self) -> Entry {
+        Entry {
+            term: self.term,
+            index: self.index,
+            command: serde_json::to_string(&self.command).unwrap(),
+        }
+    }
+}
+
+impl<T> From<Entry> for LogEntry<T>
+where
+    T: for<'de> serde::Deserialize<'de>,
+{
+    fn from(entry: Entry) -> Self {
+        Self {
+            term: entry.term,
+            index: entry.index,
+            command: serde_json::from_str(&entry.command).unwrap(),
+        }
+    }
+}
+
 #[derive(Debug)]
-pub(crate) struct Node<SO, PCO, SM> {
+pub(crate) struct Node<SO, PCO, SM, LET> {
     address: SocketAddr,
     peers: Vec<String>,
     node_type: NodeType, // TODO: hide this field so it can only be changed through the change_node_type method
@@ -43,9 +77,10 @@ pub(crate) struct Node<SO, PCO, SM> {
     get_candidate_sleep_time: fn() -> Duration,
     get_client: fn(String) -> PCO,
     state_machine: SM,
+    log_entries: Vec<LogEntry<LET>>,
 }
 
-impl<SO, PCO, SM> Node<SO, PCO, SM> {
+impl<SO, PCO, SM, LET> Node<SO, PCO, SM, LET> {
     pub(crate) fn change_node_type(
         &mut self,
         node_type: NodeType,
@@ -63,9 +98,9 @@ impl<SO, PCO, SM> Node<SO, PCO, SM> {
     }
 }
 
-impl<PCO, SM> Node<Sleep, PCO, SM>
+impl<PCO, SM, LET> Node<Sleep, PCO, SM, LET>
 where
-    SM: StateMachine + Sync,
+    SM: StateMachine<Event = LET> + Sync,
 {
     pub(crate) fn new(
         address: SocketAddr,
@@ -86,20 +121,21 @@ where
             heart_beat_event_sender,
             heart_beat_event_receiver,
             _sleep: tokio::time::sleep,
-            get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(80..120)),
+            get_candidate_sleep_time: || Duration::from_millis(thread_rng().gen_range(0..100)),
             node_type_changed_event_receiver,
             node_type_changed_event_sender,
             get_client,
             state_machine,
+            log_entries: Vec::new(),
         }
     }
 }
 
-impl<SO, PCO, SM> Node<SO, PCO, SM>
+impl<SO, PCO, SM> Node<SO, PCO, SM, HashMapStateMachineEvent<u64, u64>>
 where
     SO: Future<Output = ()> + Send + 'static,
     PCO: Future<Output = Result<RaftClient<Channel>, tonic::transport::Error>> + 'static + Send,
-    SM: Send + 'static,
+    SM: StateMachine<Event = HashMapStateMachineEvent<u64, u64>> + Send + 'static,
 {
     pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
@@ -115,7 +151,11 @@ where
             let mut heart_beat_event_receiver = node.lock().await.heart_beat_event_receiver.clone();
             let mut node_type_changed_event_receiver =
                 node.lock().await.node_type_changed_event_receiver.clone();
+
+            let mut should_send_put_event = false;
             loop {
+                // Temporarilly sending put events manually the first time each node becomes a leader
+                // Eventually we'll have a load balancer that will send events to the leader
                 let node_type = node.lock().await.node_type.clone();
 
                 match node_type {
@@ -177,6 +217,7 @@ where
 
                         if total_votes > (peers.len() + 1) / 2 {
                             info!("I'm a leader now");
+                            should_send_put_event = true;
                             node.lock()
                                 .await
                                 .change_node_type(NodeType::Leader)
@@ -194,6 +235,28 @@ where
                     NodeType::Leader => {
                         info!("I'm a leader");
                         info!("Sending heartbeats");
+
+                        // Temporarilly sending put events manually the first time each node becomes a leader
+                        // Eventually we'll have a load balancer that will send events to the leader
+                        let entries_to_send = if should_send_put_event {
+                            should_send_put_event = false;
+                            let mut node = node.lock().await;
+                            let term = node.term;
+                            let command = HashMapStateMachineEvent::Put(term, term);
+                            let index = node.log_entries.len() as u64;
+
+                            node.state_machine.apply(command.clone());
+
+                            let entry = LogEntry {
+                                term,
+                                index,
+                                command,
+                            };
+                            node.log_entries.push(entry.clone());
+                            vec![entry.into()]
+                        } else {
+                            vec![]
+                        };
                         for peer in &peers {
                             let mut client = match get_client(peer.clone()).await {
                                 Ok(client) => client,
@@ -205,6 +268,7 @@ where
 
                             let request = tonic::Request::new(HeartbeatRequest {
                                 term: node.lock().await.term,
+                                entries: entries_to_send.clone(),
                             });
 
                             match client.heartbeat(request).await {
@@ -251,6 +315,8 @@ pub(crate) mod tests {
     use anyhow::Ok;
     use tokio::{spawn, time::sleep};
 
+    use crate::state_machine::HashMapStateMachineEvent;
+
     use super::*;
 
     #[tokio::test]
@@ -265,8 +331,9 @@ pub(crate) mod tests {
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
         let get_client = |s| RaftClient::connect(s);
-        let my_state_machine: HashMap<u8, u8> = HashMap::new();
+        let my_state_machine: HashMap<u64, u64> = HashMap::new();
 
+        let log_entries: Vec<LogEntry<HashMapStateMachineEvent<u64, u64>>> = vec![];
         let _sleep = |_| async {};
         let node = Node {
             address: socket,
@@ -283,6 +350,7 @@ pub(crate) mod tests {
             node_type_changed_event_receiver,
             get_client,
             state_machine: my_state_machine,
+            log_entries,
         };
 
         let node = Arc::new(Mutex::new(node));

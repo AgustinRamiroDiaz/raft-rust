@@ -16,33 +16,46 @@ use tonic;
 
 use log::debug;
 
-use crate::node::{Node, NodeType};
+use crate::{
+    node::{LogEntry, Node, NodeType},
+    state_machine::HashMapStateMachineEvent,
+};
 
 #[derive(Debug)]
-pub struct Heartbeater<SO, PCO, SM> {
-    pub node: Arc<Mutex<Node<SO, PCO, SM>>>,
+pub struct Heartbeater<SO, PCO, SM, LET> {
+    pub node: Arc<Mutex<Node<SO, PCO, SM, LET>>>,
 }
 
 #[tonic::async_trait]
-impl<SO, PCO, SM> Raft for Heartbeater<SO, PCO, SM>
+impl<SO, PCO, SM, LET> Raft for Heartbeater<SO, PCO, SM, LET>
 where
     SO: Future<Output = ()> + Send + 'static,
     PCO: Send + 'static,
     SM: Send + 'static,
+    LET: Send + 'static,
 {
     async fn heartbeat(
         &self,
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatReply>, Status> {
+        let request = request.into_inner();
         debug!("Got a request: {:?}", request);
+        for entry in request.entries {
+            debug!(
+                "Got an entry: {:?}",
+                <main_grpc::Entry as Into<LogEntry<HashMapStateMachineEvent<u64, u64>>>>::into(
+                    entry
+                )
+            );
+        }
 
         let mut node = self.node.lock().await;
 
-        if request.get_ref().term > node.term {
-            node.term = request.get_ref().term;
+        if request.term > node.term {
+            node.term = request.term;
         }
 
-        if request.get_ref().term >= node.term {
+        if request.term >= node.term {
             node.change_node_type(NodeType::Follower).unwrap();
             node.heart_beat_event_sender.send_modify(|x| *x = *x + 1);
         }

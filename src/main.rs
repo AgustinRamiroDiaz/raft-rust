@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
 
     let peers_clients = |peer| RaftClient::connect(peer);
 
-    let my_state_machine: HashMap<u8, u8> = HashMap::new();
+    let my_state_machine: HashMap<u64, u64> = HashMap::new();
 
     node::Node::run(Arc::new(Mutex::new(Node::new(
         addr,
