@@ -136,6 +136,67 @@ where
             }
         }
     }
+
+    async fn run_client_candidate(
+        node: Arc<Mutex<Self>>,
+        peers: &[String],
+        get_client: fn(String) -> PCO,
+        node_type_changed_event_receiver: &mut Receiver<()>,
+        _sleep: fn(Duration) -> SO,
+    ) {
+        info!("I'm a candidate");
+
+        {
+            let mut node = node.lock().await;
+            node.term += 1;
+            node.last_voted_for_term = Some(node.term);
+        }
+
+        let mut total_votes = 1; // I vote for myself
+        for peer in peers {
+            let mut client = match get_client(peer.clone()).await {
+                Ok(client) => client,
+                Err(e) => {
+                    warn!("Failed to connect to {}: {:?}", &peer, e);
+                    continue;
+                }
+            };
+
+            let request = tonic::Request::new(RequestVoteRequest {
+                term: node.lock().await.term,
+            });
+
+            match client.request_vote(request).await {
+                Ok(response) => {
+                    debug!("RESPONSE={:?}", response);
+                    if response.get_ref().vote_granted {
+                        info!("I got a vote!");
+                        total_votes += 1;
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to send request: {:?}", e);
+                }
+            };
+        }
+
+        if total_votes > (peers.len() + 1) / 2 {
+            info!("I'm a leader now");
+            node.lock()
+                .await
+                .change_node_type(NodeType::Leader)
+                .unwrap();
+        } else {
+            info!("Waiting to request votes again");
+            select! {
+                _ = node_type_changed_event_receiver.changed() => {
+                }
+                _ = _sleep((node.lock().await.get_candidate_sleep_time)()) => {
+                }
+            }
+        }
+    }
+
     async fn run_client(node: Arc<Mutex<Self>>) -> anyhow::Error {
         let peers = node.lock().await.peers.clone();
         let get_client = node.lock().await.get_client;
@@ -169,58 +230,14 @@ where
                     }
                 }
                 NodeType::Candidate => {
-                    info!("I'm a candidate");
-
-                    {
-                        let mut node = node.lock().await;
-                        node.term += 1;
-                        node.last_voted_for_term = Some(node.term);
-                    }
-
-                    let mut total_votes = 1; // I vote for myself
-                    for peer in &peers {
-                        let mut client = match get_client(peer.clone()).await {
-                            Ok(client) => client,
-                            Err(e) => {
-                                warn!("Failed to connect to {}: {:?}", &peer, e);
-                                continue;
-                            }
-                        };
-
-                        let request = tonic::Request::new(RequestVoteRequest {
-                            term: node.lock().await.term,
-                        });
-
-                        match client.request_vote(request).await {
-                            Ok(response) => {
-                                debug!("RESPONSE={:?}", response);
-                                if response.get_ref().vote_granted {
-                                    info!("I got a vote!");
-                                    total_votes += 1;
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Failed to send request: {:?}", e);
-                            }
-                        };
-                    }
-
-                    if total_votes > (peers.len() + 1) / 2 {
-                        info!("I'm a leader now");
-                        should_send_put_event = true;
-                        node.lock()
-                            .await
-                            .change_node_type(NodeType::Leader)
-                            .unwrap();
-                    } else {
-                        info!("Waiting to request votes again");
-                        select! {
-                            _ = node_type_changed_event_receiver.changed() => {
-                            }
-                            _ = _sleep((node.lock().await.get_candidate_sleep_time)()) => {
-                            }
-                        }
-                    }
+                    Self::run_client_candidate(
+                        node.clone(),
+                        &peers,
+                        get_client,
+                        &mut node_type_changed_event_receiver,
+                        _sleep,
+                    )
+                    .await;
                 }
                 NodeType::Leader => {
                     info!("I'm a leader");
