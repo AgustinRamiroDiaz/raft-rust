@@ -1,23 +1,21 @@
+use crate::log_entry::LogEntry;
+use crate::{
+    node::{Node, NodeType},
+    state_machine::HashMapStateMachineEvent,
+};
+use log::debug;
+use main_grpc::{
+    raft_server::Raft, HeartbeatReply, HeartbeatRequest, RequestVoteReply, RequestVoteRequest,
+};
 use std::future::Future;
 use std::sync::Arc;
-
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tonic::{Request, Response, Status};
 
-use main_grpc::{
-    raft_server::Raft, HeartbeatReply, HeartbeatRequest, RequestVoteReply, RequestVoteRequest,
-};
 pub mod main_grpc {
     tonic::include_proto!("main");
 }
-
-use log::debug;
-
-use crate::{
-    node::{LogEntry, Node, NodeType},
-    state_machine::HashMapStateMachineEvent,
-};
 
 #[derive(Debug)]
 pub struct Heartbeater<SO, PCO, SM, LET> {

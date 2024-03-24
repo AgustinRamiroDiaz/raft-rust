@@ -1,24 +1,22 @@
-use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
-
+use crate::server::main_grpc::RequestVoteRequest;
 use crate::{
     client_trait::RaftClientTrait,
+    log_entry::LogEntry,
     server::{
-        main_grpc::{raft_client::RaftClient, raft_server::RaftServer, Entry, HeartbeatRequest},
+        main_grpc::{raft_client::RaftClient, raft_server::RaftServer, HeartbeatRequest},
         Heartbeater,
     },
     state_machine::{HashMapStateMachineEvent, StateMachine},
 };
 use log::{debug, info, warn};
 use rand::{thread_rng, Rng};
-use serde::Serialize;
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     select,
     sync::{watch, Mutex},
     time::{Instant, Sleep},
 };
 use tonic::transport::{Channel, Server};
-
-use crate::server::main_grpc::RequestVoteRequest;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum NodeType {
@@ -28,39 +26,6 @@ pub(crate) enum NodeType {
 }
 
 pub(crate) type HeartBeatEvent = u64;
-
-#[derive(Debug, Clone)]
-pub(crate) struct LogEntry<T> {
-    term: u64,
-    index: u64,
-    command: T,
-}
-// TODO: change for TryInto and TryFrom
-impl<T> From<LogEntry<T>> for Entry
-where
-    T: Serialize,
-{
-    fn from(val: LogEntry<T>) -> Self {
-        Entry {
-            term: val.term,
-            index: val.index,
-            command: serde_json::to_string(&val.command).unwrap(),
-        }
-    }
-}
-
-impl<T> From<Entry> for LogEntry<T>
-where
-    T: for<'de> serde::Deserialize<'de>,
-{
-    fn from(entry: Entry) -> Self {
-        Self {
-            term: entry.term,
-            index: entry.index,
-            command: serde_json::from_str(&entry.command).unwrap(),
-        }
-    }
-}
 
 #[derive(Debug)]
 pub(crate) struct Node<SO, PCO, SM, LET> {

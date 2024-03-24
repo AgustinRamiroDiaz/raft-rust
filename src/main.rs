@@ -1,5 +1,6 @@
 mod arguments;
 mod client_trait;
+mod log_entry;
 mod node;
 mod server;
 mod state_machine;
