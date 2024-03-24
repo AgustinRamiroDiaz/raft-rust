@@ -138,7 +138,7 @@ where
     }
 
     async fn run_client_candidate(
-        node: Arc<Mutex<Self>>,
+        node: &Arc<Mutex<Self>>,
         peers: &[String],
         get_client: fn(String) -> PCO,
         node_type_changed_event_receiver: &mut Receiver<()>,
@@ -197,6 +197,69 @@ where
         }
     }
 
+    async fn run_client_leader(
+        node: &Arc<Mutex<Self>>,
+        peers: &[String],
+        get_client: fn(String) -> PCO,
+        node_type_changed_event_receiver: &mut Receiver<()>,
+        _sleep: fn(Duration) -> SO,
+    ) {
+        info!("I'm a leader");
+        info!("Sending heartbeats");
+
+        // Temporarilly sending put events manually the first time each node becomes a leader
+        // Eventually we'll have a load balancer that will send events to the leader
+        let entries_to_send = if thread_rng().gen_bool(0.1) {
+            let mut node = node.lock().await;
+            let term = node.term;
+            let command = HashMapStateMachineEvent::Put(term, term);
+            let index = node.log_entries.len() as u64;
+
+            node.state_machine.apply(command.clone());
+
+            let entry = LogEntry {
+                term,
+                index,
+                command,
+            };
+            node.log_entries.push(entry.clone());
+            vec![entry.into()]
+        } else {
+            vec![]
+        };
+        for peer in peers {
+            let mut client = match get_client(peer.clone()).await {
+                Ok(client) => client,
+                Err(e) => {
+                    warn!("Failed to connect to {}: {:?}", &peer, e);
+                    continue;
+                }
+            };
+
+            let request = tonic::Request::new(HeartbeatRequest {
+                term: node.lock().await.term,
+                entries: entries_to_send.clone(),
+            });
+
+            match client.heartbeat(request).await {
+                Ok(response) => {
+                    debug!("RESPONSE={:?}", response);
+                }
+                Err(e) => {
+                    warn!("Failed to send request: {:?}", e);
+                }
+            };
+        }
+
+        info!("Waiting to send heartbeats again");
+        select! {
+            _ = node_type_changed_event_receiver.changed() => {
+            }
+            _ = _sleep(Duration::from_millis(500)) => {
+            }
+        }
+    }
+
     async fn run_client(node: Arc<Mutex<Self>>) -> anyhow::Error {
         let peers = node.lock().await.peers.clone();
         let get_client = node.lock().await.get_client;
@@ -211,10 +274,7 @@ where
         let mut node_type_changed_event_receiver =
             node.lock().await.node_type_changed_event_receiver.clone();
 
-        let mut should_send_put_event = false;
         loop {
-            // Temporarilly sending put events manually the first time each node becomes a leader
-            // Eventually we'll have a load balancer that will send events to the leader
             let node_type = node.lock().await.node_type.clone();
 
             match node_type {
@@ -231,7 +291,7 @@ where
                 }
                 NodeType::Candidate => {
                     Self::run_client_candidate(
-                        node.clone(),
+                        &node,
                         &peers,
                         get_client,
                         &mut node_type_changed_event_receiver,
@@ -240,61 +300,14 @@ where
                     .await;
                 }
                 NodeType::Leader => {
-                    info!("I'm a leader");
-                    info!("Sending heartbeats");
-
-                    // Temporarilly sending put events manually the first time each node becomes a leader
-                    // Eventually we'll have a load balancer that will send events to the leader
-                    let entries_to_send = if should_send_put_event {
-                        should_send_put_event = false;
-                        let mut node = node.lock().await;
-                        let term = node.term;
-                        let command = HashMapStateMachineEvent::Put(term, term);
-                        let index = node.log_entries.len() as u64;
-
-                        node.state_machine.apply(command.clone());
-
-                        let entry = LogEntry {
-                            term,
-                            index,
-                            command,
-                        };
-                        node.log_entries.push(entry.clone());
-                        vec![entry.into()]
-                    } else {
-                        vec![]
-                    };
-                    for peer in &peers {
-                        let mut client = match get_client(peer.clone()).await {
-                            Ok(client) => client,
-                            Err(e) => {
-                                warn!("Failed to connect to {}: {:?}", &peer, e);
-                                continue;
-                            }
-                        };
-
-                        let request = tonic::Request::new(HeartbeatRequest {
-                            term: node.lock().await.term,
-                            entries: entries_to_send.clone(),
-                        });
-
-                        match client.heartbeat(request).await {
-                            Ok(response) => {
-                                debug!("RESPONSE={:?}", response);
-                            }
-                            Err(e) => {
-                                warn!("Failed to send request: {:?}", e);
-                            }
-                        };
-                    }
-
-                    info!("Waiting to send heartbeats again");
-                    select! {
-                        _ = node_type_changed_event_receiver.changed() => {
-                        }
-                        _ = _sleep(Duration::from_millis(500)) => {
-                        }
-                    }
+                    Self::run_client_leader(
+                        &node,
+                        &peers,
+                        get_client,
+                        &mut node_type_changed_event_receiver,
+                        _sleep,
+                    )
+                    .await
                 }
             }
         }
