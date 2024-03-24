@@ -38,20 +38,17 @@ pub(crate) struct Node<SO, PCO, SM, LET> {
 }
 
 impl<SO, PCO, SM, LET> Node<SO, PCO, SM, LET> {
-    pub(crate) fn change_node_type(
-        &mut self,
-        node_type: NodeType,
-    ) -> Result<(), watch::error::SendError<()>> {
-        if self.node_type != node_type {
-            info!(
-                "Node type changed from {:?} to {:?}",
-                self.node_type, node_type
-            );
-            self.node_type = node_type;
-            self.node_type_changed_event_sender.send(())?;
+    pub(crate) fn change_node_type(&mut self, node_type: NodeType) {
+        if self.node_type == node_type {
+            return;
         }
 
-        Ok(())
+        info!(
+            "Node type changed from {:?} to {:?}",
+            self.node_type, node_type
+        );
+        self.node_type = node_type;
+        self.node_type_changed_event_sender.send_modify(|_| ());
     }
 }
 

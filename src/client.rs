@@ -103,10 +103,7 @@ where
 
         if total_votes > (peers.len() + 1) / 2 {
             info!("I'm a leader now");
-            node.lock()
-                .await
-                .change_node_type(NodeType::Leader)
-                .unwrap();
+            node.lock().await.change_node_type(NodeType::Leader)
         } else {
             info!("Waiting to request votes again");
             select! {
@@ -202,10 +199,7 @@ where
                 NodeType::Follower => {
                     match run_client_follower(&mut heart_beat_event_receiver, _sleep).await {
                         NodeClientFollowerOutput::DidNotReceiveHeartbeat => {
-                            node.lock()
-                                .await
-                                .change_node_type(NodeType::Candidate)
-                                .unwrap(); // TODO: don't unwrap
+                            node.lock().await.change_node_type(NodeType::Candidate)
                         }
                         NodeClientFollowerOutput::HeartbeatReceived => {}
                     }

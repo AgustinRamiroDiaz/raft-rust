@@ -52,7 +52,7 @@ where
         }
 
         if request.term >= node.term {
-            node.change_node_type(NodeType::Follower).unwrap();
+            node.change_node_type(NodeType::Follower);
             node.heart_beat_event_sender.send_modify(|x| *x += 1);
         }
 
@@ -84,7 +84,7 @@ where
 
         if request.get_ref().term > node.term {
             node.term = request.get_ref().term;
-            node.change_node_type(NodeType::Follower).unwrap();
+            node.change_node_type(NodeType::Follower);
         }
 
         Ok(Response::new(reply))
