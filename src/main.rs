@@ -1,4 +1,5 @@
 mod arguments;
+mod client_trait;
 mod node;
 mod server;
 mod state_machine;
@@ -20,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
 
     let peers = args.peers;
 
-    let peers_clients = |peer| RaftClient::connect(peer);
+    let peers_clients = RaftClient::connect;
 
     let my_state_machine: HashMap<u64, u64> = HashMap::new();
 

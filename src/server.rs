@@ -12,8 +12,6 @@ pub mod main_grpc {
     tonic::include_proto!("main");
 }
 
-use tonic;
-
 use log::debug;
 
 use crate::{
@@ -57,7 +55,7 @@ where
 
         if request.term >= node.term {
             node.change_node_type(NodeType::Follower).unwrap();
-            node.heart_beat_event_sender.send_modify(|x| *x = *x + 1);
+            node.heart_beat_event_sender.send_modify(|x| *x += 1);
         }
 
         node.last_heartbeat = Instant::now();

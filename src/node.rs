@@ -1,6 +1,7 @@
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use crate::{
+    client_trait::RaftClientTrait,
     server::{
         main_grpc::{raft_client::RaftClient, raft_server::RaftServer, Entry, HeartbeatRequest},
         Heartbeater,
@@ -35,15 +36,15 @@ pub(crate) struct LogEntry<T> {
     command: T,
 }
 // TODO: change for TryInto and TryFrom
-impl<T> Into<Entry> for LogEntry<T>
+impl<T> From<LogEntry<T>> for Entry
 where
     T: Serialize,
 {
-    fn into(self) -> Entry {
+    fn from(val: LogEntry<T>) -> Self {
         Entry {
-            term: self.term,
-            index: self.index,
-            command: serde_json::to_string(&self.command).unwrap(),
+            term: val.term,
+            index: val.index,
+            command: serde_json::to_string(&val.command).unwrap(),
         }
     }
 }
@@ -98,14 +99,16 @@ impl<SO, PCO, SM, LET> Node<SO, PCO, SM, LET> {
     }
 }
 
-impl<PCO, SM, LET> Node<Sleep, PCO, SM, LET>
+impl<PCO, SM, LET, F> Node<Sleep, F, SM, LET>
 where
     SM: StateMachine<Event = LET> + Sync,
+    F: Future<Output = Result<PCO, tonic::transport::Error>>,
+    PCO: RaftClientTrait,
 {
     pub(crate) fn new(
         address: SocketAddr,
         peers: Vec<String>,
-        get_client: fn(String) -> PCO,
+        get_client: fn(String) -> F,
         state_machine: SM,
     ) -> Self {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
@@ -139,9 +142,9 @@ where
 {
     pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
         let peers = node.lock().await.peers.clone();
-        let get_client = node.lock().await.get_client.clone();
+        let get_client = node.lock().await.get_client;
 
-        let _sleep = node.lock().await._sleep.clone();
+        let _sleep = node.lock().await._sleep;
 
         let _node = node.clone();
         let client_thread = tokio::spawn(async move {
@@ -330,7 +333,7 @@ pub(crate) mod tests {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
-        let get_client = |s| RaftClient::connect(s);
+        let get_client = RaftClient::connect;
         let my_state_machine: HashMap<u64, u64> = HashMap::new();
 
         let log_entries: Vec<LogEntry<HashMapStateMachineEvent<u64, u64>>> = vec![];
