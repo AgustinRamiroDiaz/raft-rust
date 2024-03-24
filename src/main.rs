@@ -1,4 +1,5 @@
 mod arguments;
+mod client;
 mod client_trait;
 mod log_entry;
 mod node;
@@ -26,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
 
     let my_state_machine: HashMap<u64, u64> = HashMap::new();
 
-    node::Node::run(Arc::new(Mutex::new(Node::new(
+    Node::run(Arc::new(Mutex::new(Node::new(
         addr,
         peers,
         peers_clients,
