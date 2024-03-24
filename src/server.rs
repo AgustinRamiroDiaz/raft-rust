@@ -18,12 +18,12 @@ pub mod main_grpc {
 }
 
 #[derive(Debug)]
-pub struct Heartbeater<SO, PCO, SM, LET> {
+pub struct RaftServerNode<SO, PCO, SM, LET> {
     pub node: Arc<Mutex<Node<SO, PCO, SM, LET>>>,
 }
 
 #[tonic::async_trait]
-impl<SO, PCO, SM, LET> Raft for Heartbeater<SO, PCO, SM, LET>
+impl<SO, PCO, SM, LET> Raft for RaftServerNode<SO, PCO, SM, LET>
 where
     SO: Future<Output = ()> + Send + 'static,
     PCO: Send + 'static,
