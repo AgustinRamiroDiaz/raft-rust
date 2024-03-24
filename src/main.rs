@@ -27,12 +27,14 @@ async fn main() -> anyhow::Result<()> {
 
     let my_state_machine: HashMap<u64, u64> = HashMap::new();
 
-    Node::run(Arc::new(Mutex::new(Node::new(
+    Node::run(
+        Arc::new(Mutex::new(Node::new(
+            peers,
+            peers_clients,
+            my_state_machine,
+        ))),
         addr,
-        peers,
-        peers_clients,
-        my_state_machine,
-    ))))
+    )
     .await?;
 
     Ok(())

@@ -11,15 +11,44 @@ use crate::{
 };
 use log::{debug, info, warn};
 use rand::{thread_rng, Rng};
+use std::net::SocketAddr;
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::sync::watch::Receiver;
 use tokio::{join, spawn};
 use tokio::{select, sync::Mutex};
 use tonic::transport::Server;
 
+#[derive(PartialEq, Debug)]
 enum NodeClientFollowerOutput {
     DidNotReceiveHeartbeat,
     HeartbeatReceived,
+}
+
+async fn run_client_follower<SO>(
+    heart_beat_event_receiver: &mut Receiver<HeartBeatEvent>,
+    _sleep: fn(Duration) -> SO,
+) -> NodeClientFollowerOutput
+where
+    SO: Future<Output = ()>,
+{
+    info!("I'm a follower");
+
+    info!("Waiting for heartbeats");
+
+    info!(
+        "Last heartbeat seen {}! ",
+        *heart_beat_event_receiver.borrow_and_update()
+    );
+    select! {
+        _ = _sleep(Duration::from_secs(2)) => {
+            warn!("Didn't receive a heartbeat in 2 seconds");
+            NodeClientFollowerOutput::DidNotReceiveHeartbeat
+        }
+        _ = heart_beat_event_receiver.changed() => {
+            info!("Heartbeat event received");
+            NodeClientFollowerOutput::HeartbeatReceived
+        }
+    }
 }
 
 impl<SO, PCO, SM, RCT> Node<SO, PCO, SM, HashMapStateMachineEvent<u64, u64>>
@@ -29,30 +58,6 @@ where
     RCT: RaftClientTrait + Send + 'static,
     SM: StateMachine<Event = HashMapStateMachineEvent<u64, u64>> + Send + 'static,
 {
-    async fn run_client_follower(
-        heart_beat_event_receiver: &mut Receiver<HeartBeatEvent>,
-        _sleep: fn(Duration) -> SO,
-    ) -> NodeClientFollowerOutput {
-        info!("I'm a follower");
-
-        info!("Waiting for heartbeats");
-
-        info!(
-            "Last heartbeat seen {}! ",
-            *heart_beat_event_receiver.borrow_and_update()
-        );
-        select! {
-            _ = _sleep(Duration::from_secs(2)) => {
-                warn!("Didn't receive a heartbeat in 2 seconds");
-                NodeClientFollowerOutput::DidNotReceiveHeartbeat
-            }
-            _ = heart_beat_event_receiver.changed() => {
-                info!("Heartbeat event received");
-                NodeClientFollowerOutput::HeartbeatReceived
-            }
-        }
-    }
-
     async fn run_client_candidate(
         node: &Arc<Mutex<Self>>,
         peers: &[String],
@@ -195,7 +200,7 @@ where
 
             match node_type {
                 NodeType::Follower => {
-                    match Self::run_client_follower(&mut heart_beat_event_receiver, _sleep).await {
+                    match run_client_follower(&mut heart_beat_event_receiver, _sleep).await {
                         NodeClientFollowerOutput::DidNotReceiveHeartbeat => {
                             node.lock()
                                 .await
@@ -229,13 +234,13 @@ where
         }
     }
 
-    pub(crate) async fn run(node: Arc<Mutex<Self>>) -> anyhow::Result<()> {
+    pub(crate) async fn run(node: Arc<Mutex<Self>>, address: SocketAddr) -> anyhow::Result<()> {
         let _node = node.clone();
         let client_thread = spawn(Self::run_client(_node.clone()));
 
         let server_thread = Server::builder()
             .add_service(RaftServer::new(RaftServerNode { node: node.clone() }))
-            .serve(node.lock().await.address);
+            .serve(address);
 
         let (client_status, server_status) = join!(client_thread, server_thread);
 
@@ -293,13 +298,47 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn follower_heartbeats_received() -> anyhow::Result<()> {
+        let (heart_beat_event_sender, mut heart_beat_event_receiver) = watch::channel(0);
+
+        heart_beat_event_sender.send_modify(|x| *x += 1);
+
+        let output = run_client_follower(&mut heart_beat_event_receiver, |_| async {
+            sleep(Duration::from_millis(100)).await;
+            panic!("Test is taking too long, aborting")
+        })
+        .await;
+
+        assert_eq!(output, NodeClientFollowerOutput::HeartbeatReceived);
+
+        assert_eq!(
+            *heart_beat_event_receiver.borrow_and_update(),
+            1,
+            "Heartbeat event should have been received"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn follower_becomes_candidate_when_no_heartbeats_received() -> anyhow::Result<()> {
+        let (_do_not_remove_me_because_i_shall_not_be_dropped, mut heart_beat_event_receiver) =
+            watch::channel(0);
+
+        let output = run_client_follower(&mut heart_beat_event_receiver, |_| async {}).await;
+
+        assert_eq!(output, NodeClientFollowerOutput::DidNotReceiveHeartbeat);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn becomes_candidate_when_no_heartbeats() -> anyhow::Result<()> {
         spawn(async {
             sleep(Duration::from_millis(100)).await;
             panic!("Test is taking too long, probably a deadlock")
         });
 
-        let socket = "[::1]:50000".parse()?;
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
@@ -319,7 +358,6 @@ pub(crate) mod tests {
         let log_entries: Vec<LogEntry<HashMapStateMachineEvent<u64, u64>>> = vec![];
         let _sleep = |_| async {};
         let node = Node {
-            address: socket,
             peers: vec![],
             term: 0,
             last_heartbeat: Instant::now(),

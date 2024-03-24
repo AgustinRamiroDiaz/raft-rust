@@ -1,7 +1,7 @@
 use crate::{client_trait::RaftClientTrait, log_entry::LogEntry, state_machine::StateMachine};
 use log::info;
 use rand::{thread_rng, Rng};
-use std::{future::Future, net::SocketAddr, time::Duration};
+use std::{future::Future, time::Duration};
 
 use tokio::time::sleep;
 
@@ -21,7 +21,6 @@ pub(crate) type HeartBeatEvent = u64;
 
 #[derive(Debug)]
 pub(crate) struct Node<SO, PCO, SM, LET> {
-    pub(crate) address: SocketAddr,
     pub(crate) peers: Vec<String>,
     pub(crate) node_type: NodeType, // TODO: hide this field so it can only be changed through the change_node_type method
     pub(crate) last_heartbeat: Instant, // TODO: maybe we can remove this field an rely only in the channels
@@ -62,17 +61,11 @@ where
     F: Future<Output = Result<PCO, tonic::transport::Error>>,
     PCO: RaftClientTrait,
 {
-    pub(crate) fn new(
-        address: SocketAddr,
-        peers: Vec<String>,
-        get_client: fn(String) -> F,
-        state_machine: SM,
-    ) -> Self {
+    pub(crate) fn new(peers: Vec<String>, get_client: fn(String) -> F, state_machine: SM) -> Self {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
         Self {
-            address,
             peers,
             node_type: NodeType::Follower,
             last_heartbeat: Instant::now(),
