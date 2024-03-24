@@ -1,9 +1,10 @@
+use crate::client_trait::RaftClientTrait;
 use crate::node::{HeartBeatEvent, Node, NodeType};
 use crate::server::main_grpc::RequestVoteRequest;
 use crate::{
     log_entry::LogEntry,
     server::{
-        main_grpc::{raft_client::RaftClient, raft_server::RaftServer, HeartbeatRequest},
+        main_grpc::{raft_server::RaftServer, HeartbeatRequest},
         RaftServerNode,
     },
     state_machine::{HashMapStateMachineEvent, StateMachine},
@@ -12,20 +13,20 @@ use log::{debug, info, warn};
 use rand::{thread_rng, Rng};
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::sync::watch::Receiver;
-
 use tokio::{join, spawn};
 use tokio::{select, sync::Mutex};
-use tonic::transport::{Channel, Server};
+use tonic::transport::Server;
 
 enum NodeClientFollowerOutput {
     DidNotReceiveHeartbeat,
     HeartbeatReceived,
 }
 
-impl<SO, PCO, SM> Node<SO, PCO, SM, HashMapStateMachineEvent<u64, u64>>
+impl<SO, PCO, SM, RCT> Node<SO, PCO, SM, HashMapStateMachineEvent<u64, u64>>
 where
     SO: Future<Output = ()> + Send + 'static,
-    PCO: Future<Output = Result<RaftClient<Channel>, tonic::transport::Error>> + 'static + Send,
+    PCO: Future<Output = Result<RCT, tonic::transport::Error>> + Send + 'static,
+    RCT: RaftClientTrait + Send + 'static,
     SM: StateMachine<Event = HashMapStateMachineEvent<u64, u64>> + Send + 'static,
 {
     async fn run_client_follower(
@@ -248,16 +249,48 @@ where
 pub(crate) mod tests {
     use std::{collections::HashMap, sync::Arc, vec};
 
-    use anyhow::Ok;
     use tokio::{
         spawn,
         sync::watch,
         time::{sleep, Instant},
     };
+    use tonic::{Request, Response, Status};
 
-    use crate::state_machine::HashMapStateMachineEvent;
+    use crate::{
+        client_trait::RaftClientTrait,
+        server::main_grpc::{HeartbeatReply, RequestVoteReply},
+        state_machine::HashMapStateMachineEvent,
+    };
 
     use super::*;
+
+    #[derive(Clone)]
+    struct RaftClientMock<H, RV> {
+        _heartbeat: H,
+        _request_vote: RV,
+    }
+
+    impl<H, RV, FH, FRV> RaftClientTrait for RaftClientMock<H, RV>
+    where
+        H: Fn(Request<HeartbeatRequest>) -> FH,
+        FH: Future<Output = Result<Response<HeartbeatReply>, Status>> + Send,
+        RV: Fn(Request<RequestVoteRequest>) -> FRV,
+        FRV: Future<Output = Result<Response<RequestVoteReply>, Status>> + Send,
+    {
+        fn heartbeat(
+            &mut self,
+            request: impl tonic::IntoRequest<HeartbeatRequest> + Send,
+        ) -> impl Future<Output = Result<Response<HeartbeatReply>, Status>> + Send {
+            (self._heartbeat)(request.into_request())
+        }
+
+        fn request_vote(
+            &mut self,
+            request: impl tonic::IntoRequest<RequestVoteRequest>,
+        ) -> impl Future<Output = Result<Response<RequestVoteReply>, Status>> + Send {
+            (self._request_vote)(request.into_request())
+        }
+    }
 
     #[tokio::test]
     async fn becomes_candidate_when_no_heartbeats() -> anyhow::Result<()> {
@@ -270,7 +303,17 @@ pub(crate) mod tests {
         let (heart_beat_event_sender, heart_beat_event_receiver) = watch::channel(0);
         let (node_type_changed_event_sender, node_type_changed_event_receiver) = watch::channel(());
 
-        let get_client = RaftClient::connect;
+        let get_client = |_| async {
+            Ok(RaftClientMock {
+                _heartbeat: |_| async { Ok(Response::new(HeartbeatReply {})) },
+                _request_vote: |_| async {
+                    Ok(Response::new(RequestVoteReply {
+                        ..Default::default()
+                    }))
+                },
+            })
+        };
+
         let my_state_machine: HashMap<u64, u64> = HashMap::new();
 
         let log_entries: Vec<LogEntry<HashMapStateMachineEvent<u64, u64>>> = vec![];

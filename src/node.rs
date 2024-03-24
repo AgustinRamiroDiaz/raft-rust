@@ -49,7 +49,7 @@ impl<SO, PCO, SM, LET> Node<SO, PCO, SM, LET> {
                 self.node_type, node_type
             );
             self.node_type = node_type;
-            return self.node_type_changed_event_sender.send(());
+            self.node_type_changed_event_sender.send(())?;
         }
 
         Ok(())
